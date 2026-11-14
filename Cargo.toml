@@ -5,6 +5,7 @@ members = [
     "crates/relating-metadata",
     "crates/relating-graph",
     "crates/relating-ai",
+    "crates/relating-ingest",
     "crates/relating-server",
 ]
 
@@ -31,9 +32,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tempfile = "3.14"
+csv = "1.3"
+sha2 = "0.10"
 
 # Internal crates
 relating-core = { path = "crates/relating-core" }
 relating-metadata = { path = "crates/relating-metadata" }
 relating-graph = { path = "crates/relating-graph" }
 relating-ai = { path = "crates/relating-ai" }
+relating-ingest = { path = "crates/relating-ingest" }

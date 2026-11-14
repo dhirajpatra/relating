@@ -42,12 +42,19 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, RelatingError> {
 }
 
 pub const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial_schema.sql");
+pub const SOURCES_AND_ONTOLOGIES_SCHEMA: &str = include_str!("../migrations/0002_sources_and_ontologies.sql");
 
 pub async fn run_migrations(pool: &DbPool) -> Result<(), RelatingError> {
     sqlx::raw_sql(INITIAL_SCHEMA)
         .execute(pool)
         .await
-        .map_err(|e| RelatingError::Database(format!("Migration failed: {}", e)))?;
+        .map_err(|e| RelatingError::Database(format!("Migration 0001 failed: {}", e)))?;
+
+    sqlx::raw_sql(SOURCES_AND_ONTOLOGIES_SCHEMA)
+        .execute(pool)
+        .await
+        .map_err(|e| RelatingError::Database(format!("Migration 0002 failed: {}", e)))?;
+
     Ok(())
 }
 

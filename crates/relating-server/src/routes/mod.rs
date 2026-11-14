@@ -1,10 +1,14 @@
 pub mod ai;
 pub mod cypher;
+pub mod graph;
 pub mod health;
+pub mod ingest;
+pub mod ontology;
 pub mod projects;
+pub mod sources;
 
 use crate::state::AppState;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -33,10 +37,35 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/projects/:id/cypher/write",
             post(cypher::cypher_write_handler),
+        )
+        // Sources endpoints
+        .route(
+            "/projects/:id/sources",
+            get(sources::list_sources_handler).post(sources::register_source_handler),
+        )
+        .route(
+            "/projects/:id/sources/:source_id",
+            delete(sources::delete_source_handler),
+        )
+        // Ontology endpoints
+        .route(
+            "/projects/:id/ontology/propose",
+            post(ontology::propose_ontology_handler),
+        )
+        .route("/projects/:id/ontology", get(ontology::get_ontology_handler))
+        .route(
+            "/projects/:id/ontology/approve",
+            post(ontology::approve_ontology_handler),
+        )
+        // Ingestion endpoint
+        .route("/projects/:id/ingest", post(ingest::run_ingestion_handler))
+        // Graph visualization elements endpoint
+        .route(
+            "/projects/:id/graph/elements",
+            get(graph::get_graph_elements_handler),
         );
 
-    let router = Router::new()
-        .nest("/api/v1", api_routes);
+    let router = Router::new().nest("/api/v1", api_routes);
 
     let static_dir = std::path::Path::new("web/dist");
     let router = if static_dir.exists() {

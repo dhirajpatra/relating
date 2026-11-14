@@ -27,3 +27,43 @@ pub struct GraphSchemaInfo {
     pub relationship_count: u64,
     pub property_keys: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CytoscapeNodeData {
+    pub id: String,
+    pub label: String,
+    pub name: String,
+    #[serde(default)]
+    pub properties: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CytoscapeNode {
+    pub data: CytoscapeNodeData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CytoscapeEdgeData {
+    pub id: String,
+    pub source: String,
+    pub target: String,
+    pub label: String,
+    #[serde(default)]
+    pub properties: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CytoscapeEdge {
+    pub data: CytoscapeEdgeData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CytoscapeElements {
+    pub nodes: Vec<CytoscapeNode>,
+    pub edges: Vec<CytoscapeEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CytoscapeGraph {
+    pub elements: CytoscapeElements,
+}

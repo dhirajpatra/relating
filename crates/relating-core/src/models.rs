@@ -166,3 +166,173 @@ pub struct Job {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SourceId(pub Uuid);
+
+impl SourceId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for SourceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for SourceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceStatus {
+    Pending,
+    Processed,
+    Failed,
+}
+
+impl Default for SourceStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Source {
+    pub id: SourceId,
+    pub project_id: ProjectId,
+    pub filename: String,
+    pub content_hash: String,
+    pub content_type: String,
+    pub byte_size: u64,
+    pub status: SourceStatus,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterSourceRequest {
+    pub filename: String,
+    pub content: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OntologyId(pub Uuid);
+
+impl OntologyId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for OntologyId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for OntologyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OntologyStatus {
+    Proposed,
+    Approved,
+    Rejected,
+}
+
+impl Default for OntologyStatus {
+    fn default() -> Self {
+        Self::Proposed
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyDefinition {
+    pub name: String,
+    pub data_type: String,
+    #[serde(default)]
+    pub is_primary_key: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityDefinition {
+    pub label: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub properties: Vec<PropertyDefinition>,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipDefinition {
+    pub rel_type: String,
+    pub source_label: String,
+    pub target_label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OntologySchema {
+    #[serde(default)]
+    pub entities: Vec<EntityDefinition>,
+    #[serde(default)]
+    pub relationships: Vec<RelationshipDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ontology {
+    pub id: OntologyId,
+    pub project_id: ProjectId,
+    pub version: u32,
+    pub status: OntologyStatus,
+    pub schema: OntologySchema,
+    pub created_at: DateTime<Utc>,
+    pub approved_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedNode {
+    pub id: String,
+    pub labels: Vec<String>,
+    pub properties: std::collections::HashMap<String, serde_json::Value>,
+    pub source_id: SourceId,
+    pub record_ref: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedRelationship {
+    pub rel_type: String,
+    pub source_node_id: String,
+    pub target_node_id: String,
+    pub properties: std::collections::HashMap<String, serde_json::Value>,
+    pub source_id: SourceId,
+    pub confidence: f32,
+}
+

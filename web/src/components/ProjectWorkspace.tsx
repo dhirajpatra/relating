@@ -1,6 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api/client';
-import { AiHealthReport, GraphQueryResult, ProjectDetail } from '../types';
+import {
+  AiHealthReport,
+  GraphQueryResult,
+  OntologyStatusResponse,
+  ProjectDetail,
+  Source,
+} from '../types';
+import { GraphExplorer } from './GraphExplorer';
+import { OntologyReview } from './OntologyReview';
+import { SourceManager } from './SourceManager';
 
 interface ProjectWorkspaceProps {
   projectId: string;
@@ -9,9 +18,11 @@ interface ProjectWorkspaceProps {
 
 export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, onBack }) => {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [ontologyStatus, setOntologyStatus] = useState<OntologyStatusResponse>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'cypher' | 'schema' | 'ai'>('cypher');
+  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai'>('sources');
 
   // Cypher workbench state
   const [query, setQuery] = useState('MATCH (n) RETURN n LIMIT 25');
@@ -23,11 +34,17 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   const [aiTesting, setAiTesting] = useState(false);
   const [aiReport, setAiReport] = useState<AiHealthReport | null>(null);
 
-  const fetchProjectDetail = async () => {
+  const fetchWorkspaceData = async () => {
     try {
       setLoading(true);
-      const data = await api.getProject(projectId);
-      setDetail(data);
+      const [projData, sourcesData, ontData] = await Promise.all([
+        api.getProject(projectId),
+        api.listSources(projectId),
+        api.getOntology(projectId),
+      ]);
+      setDetail(projData);
+      setSources(sourcesData);
+      setOntologyStatus(ontData);
       setError(null);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -41,7 +58,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   };
 
   useEffect(() => {
-    fetchProjectDetail();
+    fetchWorkspaceData();
   }, [projectId]);
 
   const handleRunQuery = async (isWrite: boolean) => {
@@ -65,8 +82,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
           elapsed_ms: writeRes.elapsed_ms,
           row_count: 1,
         });
-        // Refresh schema counts after write
-        await fetchProjectDetail();
+        // Refresh project data
+        const updated = await api.getProject(projectId);
+        setDetail(updated);
       } else {
         const res = await api.runCypherRead(projectId, query);
         setQueryResult(res);
@@ -132,6 +150,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   }
 
   const { project, schema } = detail;
+  const hasApprovedOntology = ontologyStatus.approved !== undefined && ontologyStatus.approved !== null;
 
   return (
     <div style={{ maxWidth: '1200px', margin: '1.5rem auto', padding: '0 1.5rem' }}>
@@ -180,6 +199,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
               gap: '1rem',
             }}
           >
+            <span>
+              <strong>{sources.length}</strong> sources
+            </span>
             <span>
               <strong>{schema.node_count}</strong> nodes
             </span>
@@ -236,28 +258,61 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
       )}
 
       {/* Navigation Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)' }}>
-        {(['cypher', 'schema', 'ai'] as const).map((tab) => (
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-color)' }}>
+        {[
+          { id: 'sources', label: `1. Sources (${sources.length})` },
+          {
+            id: 'ontology',
+            label: `2. Ontology ${hasApprovedOntology ? '✓' : ''}`,
+          },
+          { id: 'explorer', label: '3. Graph Explorer' },
+          { id: 'cypher', label: '4. Cypher Console' },
+          { id: 'ai', label: '5. AI Service' },
+        ].map((tab) => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id as any)}
             style={{
-              padding: '0.6rem 1.25rem',
+              padding: '0.6rem 1.1rem',
               backgroundColor: 'transparent',
               border: 'none',
-              borderBottom: activeTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
-              color: activeTab === tab ? 'var(--accent-light)' : 'var(--text-muted)',
+              borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+              color: activeTab === tab.id ? 'var(--accent-light)' : 'var(--text-muted)',
               fontWeight: 600,
-              fontSize: '0.875rem',
-              textTransform: 'capitalize',
+              fontSize: '0.85rem',
             }}
           >
-            {tab === 'cypher' ? 'Cypher Console' : tab === 'schema' ? 'Graph Schema' : 'AI Service'}
+            {tab.label}
           </button>
         ))}
       </div>
 
       {/* Tab Content */}
+      {activeTab === 'sources' && (
+        <SourceManager
+          projectId={projectId}
+          sources={sources}
+          onSourcesChanged={fetchWorkspaceData}
+        />
+      )}
+
+      {activeTab === 'ontology' && (
+        <OntologyReview
+          projectId={projectId}
+          ontologyStatus={ontologyStatus}
+          hasSources={sources.length > 0}
+          onOntologyChanged={fetchWorkspaceData}
+        />
+      )}
+
+      {activeTab === 'explorer' && (
+        <GraphExplorer
+          projectId={projectId}
+          hasApprovedOntology={hasApprovedOntology}
+          onGraphMutated={fetchWorkspaceData}
+        />
+      )}
+
       {activeTab === 'cypher' && (
         <div>
           <div
@@ -453,79 +508,6 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
               )}
             </div>
           )}
-        </div>
-      )}
-
-      {activeTab === 'schema' && (
-        <div
-          style={{
-            backgroundColor: 'var(--bg-secondary)',
-            borderRadius: '8px',
-            border: '1px solid var(--border-color)',
-            padding: '1.5rem',
-          }}
-        >
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem' }}>
-            Graph Schema Overview
-          </h3>
-
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-              NODE LABELS ({schema.labels.length})
-            </h4>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {schema.labels.length === 0 ? (
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  No node labels in graph.
-                </span>
-              ) : (
-                schema.labels.map((l) => (
-                  <span
-                    key={l}
-                    style={{
-                      padding: '0.3rem 0.6rem',
-                      backgroundColor: 'rgba(99, 102, 241, 0.15)',
-                      borderRadius: '4px',
-                      color: 'var(--accent-light)',
-                      fontSize: '0.8rem',
-                      fontFamily: 'monospace',
-                    }}
-                  >
-                    :{l}
-                  </span>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
-            <h4 style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-              RELATIONSHIP TYPES ({schema.relationship_types.length})
-            </h4>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {schema.relationship_types.length === 0 ? (
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  No relationships in graph.
-                </span>
-              ) : (
-                schema.relationship_types.map((r) => (
-                  <span
-                    key={r}
-                    style={{
-                      padding: '0.3rem 0.6rem',
-                      backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                      borderRadius: '4px',
-                      color: '#c084fc',
-                      fontSize: '0.8rem',
-                      fontFamily: 'monospace',
-                    }}
-                  >
-                    [:{r}]
-                  </span>
-                ))
-              )}
-            </div>
-          </div>
         </div>
       )}
 

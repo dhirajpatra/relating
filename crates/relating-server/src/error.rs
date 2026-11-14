@@ -23,6 +23,9 @@ pub enum AppError {
     #[error("AI error: {0}")]
     Ai(#[from] relating_ai::AiError),
 
+    #[error("Ingest error: {0}")]
+    Ingest(#[from] relating_ingest::IngestError),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -53,6 +56,11 @@ impl IntoResponse for AppError {
             AppError::Ai(err) => (
                 StatusCode::BAD_GATEWAY,
                 "AI_PROVIDER_ERROR",
+                err.to_string(),
+            ),
+            AppError::Ingest(err) => (
+                StatusCode::BAD_REQUEST,
+                "INGEST_ERROR",
                 err.to_string(),
             ),
             other => (
