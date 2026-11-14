@@ -1,5 +1,7 @@
 # Relating
 
+[Relating](docs/images/Relating_%20Graph%20Intelligence%20for%20Developers.png)
+
 > **Relate + Intelligence. Build connected knowledge. Give every agent a way to reason over it.**
 
 Relating is a local-first, AI-native graph development and GraphRAG workbench. It combines the embedded [Relate](https://relatedb.ai/) graph database with mandatory AI services, document and structured-data ingestion, graph exploration, grounded retrieval, agent tools, and a guided migration path to Neo4j Aura.
