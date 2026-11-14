@@ -1,7 +1,7 @@
 # Relating
 
 ![Relating](./docs/images/Relating_Graph_Intelligence_for_Developers.png)
-![About the project](about_the_project.md)
+[About the project](about_the_project.md)
 
 > **Relate + Intelligence. Build connected knowledge. Give every agent a way to reason over it.**
 
