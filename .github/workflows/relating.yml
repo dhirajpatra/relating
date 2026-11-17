@@ -1,10 +1,16 @@
 # Relating graph validation: blocks merges when graph checks fail.
 #
-# Required setup:
-#   - Commit exported schema-as-code (relating schema export) under relating/.
-#   - Set the RELATING_PROJECT_ID variable to the validated project.
-#   - Optionally set the AURA_PASSWORD secret to include Aura analysis.
-# The workflow builds the relating CLI and runs every gate locally.
+# Project selection: set the RELATING_PROJECT_ID Actions variable to validate
+# a pinned project, or leave it unset to seed a throwaway demo project on the
+# runner and validate that instead. Either way the gates below run against a
+# real project — never against an empty ID.
+#
+# Optional setup:
+#   - Commit exported schema-as-code (relating schema export) under relating/
+#     to enable the schema-diff gate.
+#   - Set the AURA_PASSWORD secret plus the AURA_CONNECTION_ID variable to
+#     enable Aura analysis and shadow comparison.
+#   - Commit eval/questions.txt to enable the retrieval evaluation gate.
 name: Relating Graph Validation
 
 on:
@@ -25,27 +31,43 @@ jobs:
       - name: Build relating CLI
         run: cargo build --release -p relating-cli
 
+      - name: Resolve project under validation
+        id: project
+        run: |
+          if [ -n "${{ vars.RELATING_PROJECT_ID }}" ]; then
+            echo "pid=${{ vars.RELATING_PROJECT_ID }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "RELATING_PROJECT_ID unset; seeding a demo project."
+            PID=$(./target/release/relating demo seed --format json | jq -r .project_id)
+            if [ -z "$PID" ] || [ "$PID" = "null" ]; then
+              echo "Failed to seed a demo project." >&2
+              exit 1
+            fi
+            echo "pid=$PID" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Validate project (schema, contracts, integrity, index)
-        run: ./target/release/relating validate --project "${{ vars.RELATING_PROJECT_ID }}"
+        run: ./target/release/relating validate --project "${{ steps.project.outputs.pid }}"
 
       - name: Check schema-as-code diff
-        run: ./target/release/relating schema diff --project "${{ vars.RELATING_PROJECT_ID }}" --file relating/graph/schema.json
+        if: hashFiles('relating/graph/schema.json') != ''
+        run: ./target/release/relating schema diff --project "${{ steps.project.outputs.pid }}" --file relating/graph/schema.json
 
       - name: Run graph contract tests
-        run: ./target/release/relating test graph --project "${{ vars.RELATING_PROJECT_ID }}"
+        run: ./target/release/relating test graph --project "${{ steps.project.outputs.pid }}"
 
       - name: Check Aura compatibility
-        if: ${{ env.AURA_PASSWORD != '' }}
+        if: ${{ env.AURA_PASSWORD != '' && vars.AURA_CONNECTION_ID != '' }}
         env:
           AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
-        run: ./target/release/relating aura analyze --project "${{ vars.RELATING_PROJECT_ID }}" --connection "${{ vars.AURA_CONNECTION_ID }}"
+        run: ./target/release/relating aura analyze --project "${{ steps.project.outputs.pid }}" --connection "${{ vars.AURA_CONNECTION_ID }}"
 
       - name: Run retrieval evaluation gate
         if: hashFiles('eval/questions.txt') != ''
-        run: ./target/release/relating eval run --project "${{ vars.RELATING_PROJECT_ID }}" --questions eval/questions.txt --min-grounded 0.5
+        run: ./target/release/relating eval run --project "${{ steps.project.outputs.pid }}" --questions eval/questions.txt --min-grounded 0.5
 
       - name: Run shadow comparison gate
-        if: ${{ hashFiles('shadow/queries.json') != '' && env.AURA_PASSWORD != '' }}
+        if: ${{ hashFiles('shadow/queries.json') != '' && env.AURA_PASSWORD != '' && vars.AURA_CONNECTION_ID != '' }}
         env:
           AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
-        run: ./target/release/relating shadow run --project "${{ vars.RELATING_PROJECT_ID }}" --connection "${{ vars.AURA_CONNECTION_ID }}" --queries shadow/queries.json
+        run: ./target/release/relating shadow run --project "${{ steps.project.outputs.pid }}" --connection "${{ vars.AURA_CONNECTION_ID }}" --queries shadow/queries.json

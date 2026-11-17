@@ -15,6 +15,7 @@ import { PortabilityWorkbench } from './PortabilityWorkbench';
 import { RetrievalWorkbench } from './RetrievalWorkbench';
 import { SchemaWorkbench } from './SchemaWorkbench';
 import { ShadowDebugWorkbench } from './ShadowDebugWorkbench';
+import { SynthAdvisorWorkbench } from './SynthAdvisorWorkbench';
 import { SourceManager } from './SourceManager';
 
 interface ProjectWorkspaceProps {
@@ -28,7 +29,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   const [ontologyStatus, setOntologyStatus] = useState<OntologyStatusResponse>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai' | 'retrieval' | 'agents' | 'aura' | 'schema' | 'portability' | 'debug'>('sources');
+  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai' | 'retrieval' | 'agents' | 'aura' | 'schema' | 'portability' | 'debug' | 'synth'>('sources');
 
   // Cypher workbench state
   const [query, setQuery] = useState('MATCH (n) RETURN n LIMIT 25');
@@ -280,6 +281,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
           { id: 'schema', label: '9. Schema & Contracts' },
           { id: 'portability', label: '10. Portability' },
           { id: 'debug', label: '11. Shadow & Debug' },
+          { id: 'synth', label: '12. Test Data & Advisor' },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -538,6 +540,8 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
       {activeTab === 'portability' && <PortabilityWorkbench projectId={projectId} />}
 
       {activeTab === 'debug' && <ShadowDebugWorkbench projectId={projectId} />}
+
+      {activeTab === 'synth' && <SynthAdvisorWorkbench projectId={projectId} />}
 
       {activeTab === 'ai' && (
         <div

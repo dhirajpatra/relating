@@ -341,6 +341,125 @@ async fn test_debug_trace_without_evidence() {
 }
 
 #[tokio::test]
+async fn test_synth_generate_writes_dataset() {
+    let fixture = setup_clean_project().await;
+    let out = tempfile::NamedTempFile::new().unwrap();
+    let (code, stdout) = run_cli(
+        &fixture,
+        &[
+            "synth",
+            "generate",
+            "--project",
+            &fixture.project_id,
+            "--out",
+            out.path().to_str().unwrap(),
+            "--scale",
+            "0.5",
+            "--seed",
+            "3",
+            "--edge-cases",
+            "orphans,duplicates",
+        ],
+    );
+    assert_eq!(code, 0, "stdout: {}", stdout);
+    let dataset: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.path()).unwrap()).unwrap();
+    assert!(dataset["stats"]["node_count"].as_u64().unwrap() > 0);
+    assert_eq!(
+        dataset["stats"]["edge_cases_applied"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let (code, _) = run_cli(
+        &fixture,
+        &[
+            "synth",
+            "generate",
+            "--project",
+            &fixture.project_id,
+            "--out",
+            out.path().to_str().unwrap(),
+            "--edge-cases",
+            "bogus",
+        ],
+    );
+    assert_eq!(code, 2);
+}
+
+#[tokio::test]
+async fn test_advisor_analyze_with_gate() {
+    let fixture = setup_clean_project().await;
+    let queries = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        queries.path(),
+        r#"[{"name": "open", "cypher": "MATCH (a), (b) RETURN a, b"}]"#,
+    )
+    .unwrap();
+
+    let (code, stdout) = run_cli(
+        &fixture,
+        &[
+            "advisor",
+            "analyze",
+            "--project",
+            &fixture.project_id,
+            "--queries",
+            queries.path().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "stdout: {}", stdout);
+    assert!(stdout.contains("ADV-UNBOUNDED"), "stdout: {}", stdout);
+    assert!(stdout.contains("sizing (estimate)"), "stdout: {}", stdout);
+
+    let (code, _) = run_cli(
+        &fixture,
+        &[
+            "advisor",
+            "analyze",
+            "--project",
+            &fixture.project_id,
+            "--queries",
+            queries.path().to_str().unwrap(),
+            "--fail-on-warning",
+        ],
+    );
+    assert_eq!(code, 1);
+}
+
+#[tokio::test]
+async fn test_demo_seed_then_validate() {
+    let fixture = setup_clean_project().await;
+    // Seed a second project via the binary, then validate it by parsed ID.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_relating"))
+        .args(["--data-dir", &fixture.data_dir, "--database-url", &fixture.db_url])
+        .args(["demo", "seed", "--format", "json"])
+        .output()
+        .expect("failed to run relating binary");
+    assert!(output.status.success());
+    let seeded: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("seed prints JSON");
+    let demo_id = seeded["project_id"].as_str().unwrap().to_string();
+    assert_ne!(demo_id, fixture.project_id);
+
+    let (code, stdout) = run_cli(&fixture, &["validate", "--project", &demo_id]);
+    assert_eq!(code, 0, "stdout: {}", stdout);
+    assert!(stdout.contains("Result: PASS"), "stdout: {}", stdout);
+
+    // Text mode also prints a parseable project_id line.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_relating"))
+        .args(["--data-dir", &fixture.data_dir, "--database-url", &fixture.db_url])
+        .args(["demo", "seed", "--name", "second"])
+        .output()
+        .expect("failed to run relating binary");
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("project_id: "), "stdout: {}", text);
+}
+
+#[tokio::test]
 async fn test_usage_errors_exit_2() {
     let fixture = setup_clean_project().await;
     let (code, _) = run_cli(&fixture, &["validate"]);

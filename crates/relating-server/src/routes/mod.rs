@@ -1,3 +1,4 @@
+pub mod advisor;
 pub mod ai;
 pub mod aura;
 pub mod cypher;
@@ -16,6 +17,7 @@ pub mod retrieval;
 pub mod schema;
 pub mod shadow;
 pub mod sources;
+pub mod synth;
 
 use crate::state::AppState;
 use axum::routing::{delete, get, post};
@@ -175,7 +177,11 @@ pub fn create_router(state: AppState) -> Router {
         )
         // R5: shadow testing and graph debugger
         .route("/projects/:id/shadow/runs", post(shadow::run_shadow_handler))
-        .route("/projects/:id/debug/trace", post(debug::debug_trace_handler));
+        .route("/projects/:id/debug/trace", post(debug::debug_trace_handler))
+        // R6: synthetic data and performance advisor
+        .route("/projects/:id/synth/profile", post(synth::profile_handler))
+        .route("/projects/:id/synth/generate", post(synth::generate_handler))
+        .route("/projects/:id/advisor/analyze", post(advisor::analyze_handler));
 
     let mcp_state = relating_mcp::protocol::McpState {
         pool: state.pool.clone(),

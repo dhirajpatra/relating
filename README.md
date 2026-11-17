@@ -15,7 +15,7 @@ Relating is a local-first, AI-native graph development and GraphRAG workbench. I
 
 ## Quick start
 
-Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ with npm. Optional: Ollama (`ollama serve`) for local AI models — without it the app runs on the built-in offline mock provider.
+Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ with npm. Optional: Ollama (`ollama serve`) for local AI models.
 
 ```bash
 ./start.sh
@@ -25,7 +25,74 @@ Then open http://127.0.0.1:8080 in your browser to use the workbench.
 
 The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `docker compose up --build`.
 
-Current status: Milestones A–C work end to end (projects, CSV/JSON/text ingestion, AI ontology proposal and approval, entity extraction, graph explorer, Cypher console, embeddings, vector/keyword/hybrid retrieval, grounded Q&A with citations, evaluation). Next: MCP agent connection (D) and Aura migration (E). Slice 3 endpoints are documented in [docs/api/retrieval.md](docs/api/retrieval.md).
+> The built-in mock AI provider is for **development and testing only** — it returns
+> deterministic canned responses and is never production AI functionality. Configure
+> Ollama, OpenAI, or another OpenAI-compatible provider for real inference.
+
+Headless workflows use the CLI instead: `cargo run -p relating-cli -- validate --project ID`
+(validations, contract tests, schema export/diff, eval gates, shadow runs, debugging —
+see [docs/api/ci.md](docs/api/ci.md)).
+
+**Status: milestones A–E and releases R1–R6 are implemented** — projects, ingestion,
+ontology, graph explorer, Cypher, embeddings, retrieval, grounded Q&A, evaluation,
+MCP agent server, Aura migration over Bolt, schema-as-code, portability compiler,
+CI/CD gates, shadow testing, graph debugger, synthetic data, and the performance
+advisor. See [Visual overview](#visual-overview) and the [API docs](docs/api/) for
+details.
+
+---
+
+## Visual overview
+
+### The developer journey
+
+```mermaid
+flowchart LR
+    A["Develop locally<br/>Relate + AI + project"] --> B["Validate continuously<br/>Schema, contracts, tests, eval"]
+    B --> C["Prepare for production<br/>Compatibility, remediation, shadow runs"]
+    C --> D["Deploy to Neo4j Aura<br/>Approved migration + verification"]
+```
+
+### One platform, four faces
+
+```mermaid
+flowchart TB
+    subgraph WB["Graph Workbench"]
+        W["Relate · Cypher<br/>graph exploration"]
+    end
+    subgraph AI["AI Engineering"]
+        G["Ontology · GraphRAG<br/>agent workflows"]
+    end
+    subgraph DO["Graph DevOps"]
+        T["Schema-as-code · tests<br/>CI/CD gates"]
+    end
+    subgraph PE["Portability Engine"]
+        M["Compatibility · migration<br/>shadow validation"]
+    end
+    WB --- AI
+    AI --- DO
+    DO --- PE
+```
+
+### What lives where (workbench tabs)
+
+| Tab | Capability | Release |
+|---|---|---|
+| 1. Sources | CSV/JSON/text ingest, lineage | B |
+| 2. Ontology | AI proposal, approval gate | B |
+| 3. Graph Explorer | Cytoscape visualization | B |
+| 4. Cypher Console | Read/write workbench | A–B |
+| 5. AI Service | Provider config, health | A |
+| 6. Retrieval & Q&A | Embeddings, hybrid search, eval | C |
+| 7. Agents | MCP connection snippets | R1 |
+| 8. Aura Migration | Analyze → approve → migrate → verify | R1 |
+| 9. Schema & Contracts | As-code export, revisions, diff | R2 |
+| 10. Portability | Repo scan, remediation, target tests | R3 |
+| 11. Shadow & Debug | Shadow runs, GraphRAG debugger | R5 |
+| 12. Test Data & Advisor | Synthetic fixtures, perf advice | R6 |
+
+Headless equivalents live in the [`relating` CLI](docs/api/ci.md) and the
+[GitHub workflow](.github/workflows/relating.yml) (R4).
 
 ---
 
@@ -79,35 +146,30 @@ Relating must remain useful when a user never migrates to Aura.
 
 ## 3. Reference architecture
 
-```text
- Claude Code       Codex        Cursor       Any MCP Client
-      \              |            |               /
-       +-------------+------------+--------------+
-                              |
-                    MCP (stdio / HTTP)
-                              |
- CLI / SDK / REST API ---- Relating Application ---- Web UI
-                              |
-                 Project / Policy / Job Control
-                              |
-       +----------------------+----------------------+
-       |                      |                      |
-  Graph Adapter          AI Service             Ingestion
-       |                      |                      |
-  RelateBackend       LLM / Embedding /       Parsers / Chunking /
-  Neo4jBackend        Extraction / Rerank /   Tables / Connectors
-       |               Evaluation                  |
-       +----------------------+----------------------+
-                              |
-                 Project-scoped Relate stores
-                              |
-             Local files / directories / .rl files
-                              |
-                Optional Neo4j Aura destination
-
- Metadata: SQLite (local) / PostgreSQL (server)
- Secrets: OS keychain (local) / Vault or KMS (server)
+```mermaid
+flowchart TB
+    CC["Claude Code"] --> MCP["MCP server<br/>stdio + HTTP"]
+    CX["Codex"] --> MCP
+    CU["Cursor"] --> MCP
+    AG["Any MCP client"] --> MCP
+    MCP --> APP["Relating application<br/>projects · policy · jobs"]
+    CLI["relating CLI"] --> APP
+    UI["Web UI<br/>React + Cytoscape"] <--> API["REST API<br/>Axum"]
+    API --> APP
+    APP --> G["Graph backends<br/>RelateBackend · Bolt Neo4jBackend"]
+    APP --> AI["AI service<br/>chat · embed · extract · judge"]
+    APP --> ING["Ingestion<br/>parse · chunk · extract · load"]
+    APP --> RAG["Retrieval<br/>vector · keyword · hybrid"]
+    G --> STORES["Project-scoped Relate stores<br/>.rl files"]
+    G --> AURA["Neo4j Aura<br/>approved migrations"]
+    APP --> META[("Metadata<br/>SQLite local")]
+    AI -.-> OLL["Ollama / OpenAI / mock<br/>(mock: testing only)"]
 ```
+
+Secrets are never stored: Aura passwords live in environment variables at runtime,
+and provider keys stay in project configuration outside version control.
+(Roadmap: PostgreSQL metadata and OS keychain / Vault secret backends for
+server deployments.)
 
 ### Technology decisions
 
@@ -290,41 +352,27 @@ Do not implement every connector, every agent client, or a microservice fleet be
 
 ## 7. GraphRAG data pipeline
 
-```text
-Source files / APIs / databases
-              |
-       Profile + normalize
-              |
-     +--------+---------+
-     |                  |
- Text extraction    Structured extraction
-     |                  |
- Parse / chunk       Rows / tables / JSON
-     |                  |
- Embeddings          Schema mapping
-     +--------+---------+
-              |
- AI entity and relationship extraction
-              |
- Ontology mapping + entity resolution
-              |
- Provenance + confidence + source IDs
-              |
-       Project Relate graph
-              |
-  +-----------+------------+----------------+
-  |                        |                |
-Vector retrieval      Full-text search   Cypher/traversal
-  |                        |                |
-  +-----------+------------+----------------+
-              |
-        Fusion / rerank
-              |
-     Context + evidence pack
-              |
-     Required AI reasoning service
-              |
- Answer + citations + evaluation trace
+```mermaid
+flowchart TB
+    SRC["Sources<br/>CSV · JSON · text"] --> PROF["Profile + normalize"]
+    PROF --> TXT["Text branch<br/>parse · chunk"]
+    PROF --> TAB["Structured branch<br/>rows · tables"]
+    TXT --> EMB["Embeddings<br/>per content profile"]
+    TAB --> MAP["Schema mapping"]
+    EMB --> EXT["Entity + relationship extraction"]
+    MAP --> EXT
+    EXT --> ONTO["Ontology mapping<br/>+ entity resolution"]
+    ONTO --> PROV["Provenance + confidence<br/>+ source IDs"]
+    PROV --> GRAPH[("Project Relate graph")]
+    GRAPH --> VEC["Vector retrieval"]
+    GRAPH --> LEX["Keyword retrieval"]
+    GRAPH --> CYP["Cypher traversal"]
+    VEC --> FUSE["Hybrid fusion<br/>reciprocal rank"]
+    LEX --> FUSE
+    CYP -.-> FUSE
+    FUSE --> CTX["Evidence pack<br/>+ citations"]
+    CTX --> LLM["AI reasoning service<br/>(required)"]
+    LLM --> ANS["Grounded answer<br/>+ evaluation trace"]
 ```
 
 ### Multi-embedding design
@@ -341,6 +389,18 @@ Allow different embedding profiles for different content types (for example pros
 Use separate vector indexes/spaces per compatible profile. Filter retrieval by profile and dimensions; never calculate similarity across unrelated vector spaces. Preserve the original table structure and cell/row provenance rather than flattening every table into prose.
 
 ## 8. Aura migration workflow
+
+```mermaid
+flowchart TB
+    CONN["1. Connect + validate<br/>Bolt handshake · auth"] --> ANALYZE["2-5. Analyze<br/>schema · capability verdicts"]
+    ANALYZE --> PLAN["6. Plan<br/>batches · DDL · warnings"]
+    PLAN --> DRY["7. Dry run<br/>zero remote writes"]
+    DRY --> GATE{"8. Blockers?"}
+    GATE -- "yes: fix + re-run" --> DRY
+    GATE -- "none: approve" --> EXEC["9. Execute<br/>idempotent batches"]
+    EXEC --> VERIFY["10. Verify<br/>counts + samples"]
+    VERIFY --> REPORT["11. Manifest<br/>+ audit report"]
+```
 
 1. Create and validate a destination connection.
 2. Inspect source graph schema and target database capabilities.
@@ -380,25 +440,26 @@ Start with a small number of crates and modules. Expand only when boundaries are
 
 ```text
 relating/
-├── apps/
-│   ├── web/                 # React + TypeScript
-│   └── cli/                 # later: relating CLI
+├── web/                     # React + TypeScript workbench (12 tabs)
 ├── crates/
 │   ├── relating-core/       # domain types and orchestration
-│   ├── relating-api/        # Axum REST/SSE API
+│   ├── relating-server/     # Axum REST API + binaries
 │   ├── relating-graph/      # GraphBackend + Relate adapter
-│   ├── relating-ai/         # provider abstraction and AI workflows
-│   ├── relating-ingest/     # source pipeline and job model
-│   ├── relating-mcp/        # MCP tools and transports
-│   └── relating-migrate/   # Aura analysis, plan, execution, verify
-├── workers/
-│   └── document-worker/    # optional Python parsing worker
-├── migrations/             # metadata DB migrations
-├── deploy/
-│   └── compose/
-├── examples/
-├── docs/
-├── tests/
+│   ├── relating-ai/         # provider abstraction (mock/openai/ollama)
+│   ├── relating-ingest/     # source pipeline (CSV/JSON/text)
+│   ├── relating-retrieval/  # chunking, hybrid retrieval, Q&A, eval
+│   ├── relating-mcp/        # MCP tools + stdio/HTTP transports
+│   ├── relating-migrate/    # Bolt client, Aura analysis/plan/execute/verify
+│   ├── relating-schema/     # schema-as-code docs, diff, conformance
+│   ├── relating-portability/# repo scanner, rules, remediation, tests
+│   ├── relating-cli/        # relating CLI (validate, gates, schema, eval)
+│   ├── relating-shadow/     # dual-backend replay + comparison
+│   ├── relating-debug/      # GraphRAG traces + diagnosis
+│   ├── relating-synth/      # synthetic fixture generation
+│   └── relating-advisor/    # perf/cost rules, sizing, measurements
+├── docs/api/                # per-area API contracts
+├── .github/workflows/       # relating.yml CI gates
+├── start.sh                 # one-command local start
 ├── Cargo.toml
 ├── README.md
 ├── SKILL.md
@@ -410,7 +471,7 @@ relating/
 
 Do not plan this as a months-long architecture exercise. Build a thin vertical slice and keep the scope controlled.
 
-### Milestone A — runnable skeleton
+### Milestone A — runnable skeleton ✅
 - Monorepo, Rust workspace, React app.
 - Axum health/API endpoint.
 - SQLite metadata.
@@ -419,7 +480,7 @@ Do not plan this as a months-long architecture exercise. Build a thin vertical s
 - AI provider interface and configuration screen.
 - One working provider adapter and health check.
 
-### Milestone B — first useful graph
+### Milestone B — first useful graph ✅
 - CSV/JSON ingestion.
 - AI ontology proposal and approval.
 - Entity/relation extraction.
@@ -427,27 +488,34 @@ Do not plan this as a months-long architecture exercise. Build a thin vertical s
 - Schema and graph explorer.
 - Read-only Cypher console.
 
-### Milestone C — first GraphRAG answer
-- PDF/DOCX extraction.
+### Milestone C — first GraphRAG answer ✅ (text sources; PDF/DOCX not yet)
 - Chunking and embedding.
-- Vector/hybrid retrieval.
+- Vector/keyword/hybrid retrieval.
 - Grounded Q&A with source citations.
 - Trace and basic evaluation.
 
-### Milestone D — agent connection
+### Milestone D — agent connection ✅
 - MCP read-only tools.
 - stdio local connection.
 - HTTP connection for self-hosted deployment.
 - Client configuration snippets and connection test.
 
-### Milestone E — Aura migration
+### Milestone E — Aura migration ✅
 - Aura connection management.
 - Schema and compatibility inspection.
 - Dry-run plan.
 - Approved batch transfer.
 - Verification and report.
 
-A milestone is complete only when its acceptance tests pass. Prefer shipping A–C as the first usable release, then D and E as the next tightly scoped increments. If Aura migration is the primary demo requirement, implement its first happy path in parallel after the graph adapter is stable.
+### Releases R1–R6 ✅
+- R1: MCP server + Aura connection and migration.
+- R2: Graph schema-as-code + versioning.
+- R3: Graph Portability Compiler.
+- R4: Graph CI/CD + GitHub Actions.
+- R5: Shadow testing + AI Graph Debugger.
+- R6: Synthetic graph data + performance advisor.
+
+A milestone is complete only when its acceptance tests pass.
 
 ## 12. Engineering rules
 

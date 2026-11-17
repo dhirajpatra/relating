@@ -14,6 +14,8 @@ members = [
     "crates/relating-cli",
     "crates/relating-shadow",
     "crates/relating-debug",
+    "crates/relating-synth",
+    "crates/relating-advisor",
     "crates/relating-server",
 ]
 
@@ -46,6 +48,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 webpki-roots = "1.0"
 regex = "1.13"
+rand = "0.9"
 
 # Internal crates
 relating-core = { path = "crates/relating-core" }
@@ -61,3 +64,5 @@ relating-portability = { path = "crates/relating-portability" }
 relating-cli = { path = "crates/relating-cli" }
 relating-shadow = { path = "crates/relating-shadow" }
 relating-debug = { path = "crates/relating-debug" }
+relating-synth = { path = "crates/relating-synth" }
+relating-advisor = { path = "crates/relating-advisor" }

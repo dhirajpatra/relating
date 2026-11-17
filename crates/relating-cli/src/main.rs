@@ -6,6 +6,7 @@ use relating_cli::error::CliError;
 use relating_cli::eval_runner::run_eval_questions;
 use relating_cli::output::{render_validate, OutputFormat, ValidateReport};
 use relating_core::{AuraConnectionId, ProjectId, RetrievalStrategy};
+use relating_graph::GraphBackend;
 use relating_metadata::{get_aura_connection, init_db};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,6 +26,9 @@ fn usage() -> ! {
     eprintln!("  eval run --project ID --questions FILE [--strategy S] [--min-grounded F]");
     eprintln!("  shadow run --project ID --connection CID --queries FILE");
     eprintln!("  debug trace --project ID --question TEXT [--strategy S] [--no-ai]");
+    eprintln!("  synth generate --project ID --out FILE [--scale F] [--seed N] [--edge-cases a,b] [--materialize]");
+    eprintln!("  advisor analyze --project ID --queries FILE [--connection CID] [--measure] [--fail-on-warning]");
+    eprintln!("  demo seed [--name NAME]   (create a seeded demo project; prints its ID)");
     eprintln!();
     eprintln!("Exit codes: 0 pass, 1 gate/test failure, 2 usage or config error.");
     std::process::exit(2);
@@ -90,7 +94,12 @@ fn parse_flags(rest: &[String]) -> Result<(Vec<String>, HashMap<String, String>)
     let mut iter = rest.iter().peekable();
     while let Some(arg) = iter.next() {
         if let Some(name) = arg.strip_prefix("--") {
-            if name == "all" || name == "no-ai" {
+            if name == "all"
+                || name == "no-ai"
+                || name == "materialize"
+                || name == "measure"
+                || name == "fail-on-warning"
+            {
                 flags.insert(name.to_string(), "true".to_string());
                 continue;
             }
@@ -602,6 +611,272 @@ async fn cmd_debug_trace(
     Ok(0)
 }
 
+async fn cmd_synth_generate(
+    opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let project_id = parse_project_id(&require_flag(flags, "project")?)?;
+    let out = require_flag(flags, "out")?;
+    let ctx = open_context(opts, &project_id).await?;
+
+    let scale: f64 = match flags.get("scale") {
+        None => 1.0,
+        Some(value) => value
+            .parse()
+            .map_err(|_| CliError::Usage("--scale must be a number 0.0-1.0".to_string()))?,
+    };
+    let seed: u64 = match flags.get("seed") {
+        None => 0,
+        Some(value) => value
+            .parse()
+            .map_err(|_| CliError::Usage("--seed must be a number".to_string()))?,
+    };
+    let mut edge_cases = Vec::new();
+    if let Some(list) = flags.get("edge-cases") {
+        for name in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let case = match name {
+                "duplicates" => relating_synth::EdgeCase::Duplicates,
+                "orphans" => relating_synth::EdgeCase::Orphans,
+                "cycle" => relating_synth::EdgeCase::Cycle,
+                "invalid_values" => relating_synth::EdgeCase::InvalidValues,
+                other => return Err(CliError::Usage(format!("Unknown edge case '{}'", other))),
+            };
+            edge_cases.push(case);
+        }
+    }
+
+    let profile = relating_synth::profile_graph(ctx.graph.as_ref(), &ctx.graph_path)?;
+    let config = relating_synth::SynthConfig {
+        scale,
+        seed,
+        edge_cases,
+        max_nodes: 50_000,
+    };
+    let dataset = relating_synth::generate_dataset(&profile, &config)?;
+    let json = serde_json::to_string_pretty(&dataset)
+        .map_err(|e| CliError::Internal(format!("Failed to serialize dataset: {}", e)))?;
+    std::fs::write(&out, json)
+        .map_err(|e| CliError::Usage(format!("Cannot write '{}': {}", out, e)))?;
+
+    if flags.contains_key("materialize") {
+        let now = chrono::Utc::now();
+        let target = relating_core::Project {
+            id: ProjectId::new(),
+            name: format!("{}-synth-{}", ctx.project.name, seed),
+            description: format!("Synthetic fixture generated from '{}'", ctx.project.name),
+            created_at: now,
+            updated_at: now,
+            ai_config: ctx.project.ai_config.clone(),
+        };
+        relating_metadata::insert_project(&ctx.pool, &target).await?;
+        let target_path = opts
+            .data_dir
+            .join("projects")
+            .join(target.id.to_string())
+            .join("graph.rl");
+        let outcome =
+            relating_synth::materialize_dataset(ctx.graph.as_ref(), &target_path, &dataset)?;
+        println!(
+            "Generated {} nodes, {} rels -> {} (materialized {} nodes, {} rels into '{}')",
+            dataset.stats.node_count,
+            dataset.stats.rel_count,
+            out,
+            outcome.nodes_created,
+            outcome.relationships_created,
+            target.id
+        );
+    } else {
+        println!(
+            "Generated {} nodes, {} rels -> {}",
+            dataset.stats.node_count, dataset.stats.rel_count, out
+        );
+    }
+    for note in &dataset.notes {
+        println!("note: {}", note);
+    }
+    Ok(0)
+}
+
+async fn cmd_advisor_analyze(
+    opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let project_id = parse_project_id(&require_flag(flags, "project")?)?;
+    let path = require_flag(flags, "queries")?;
+    let ctx = open_context(opts, &project_id).await?;
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::Usage(format!("Cannot read queries file: {}", e)))?;
+    let queries: Vec<serde_json::Value> = serde_json::from_str(&content)
+        .map_err(|e| CliError::Usage(format!("Queries file is not valid JSON: {}", e)))?;
+
+    let mut query_reports = Vec::new();
+    let mut warning_count = 0usize;
+    for (i, query) in queries.iter().enumerate() {
+        let name = query
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cypher = query
+            .get("cypher")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CliError::Usage(format!("Query #{} has no 'cypher' string", i + 1)))?;
+        let findings = relating_advisor::analyze_query(&name, cypher);
+        warning_count += findings
+            .iter()
+            .filter(|f| f.severity == relating_advisor::Severity::Warning)
+            .count();
+        query_reports.push(serde_json::json!({"name": name, "findings": findings}));
+    }
+
+    let structure = relating_advisor::analyze_structure(ctx.graph.as_ref(), &ctx.graph_path)?;
+    warning_count += structure
+        .iter()
+        .filter(|n| n.severity == relating_advisor::Severity::Warning)
+        .count();
+    let schema = ctx.graph.get_schema(&ctx.graph_path).unwrap_or_default();
+    let sizing = relating_advisor::estimate_sizing(schema.node_count, schema.relationship_count);
+
+    let measurements = if flags.contains_key("measure") {
+        let conn_id_str = require_flag(flags, "connection")?;
+        let conn_id = AuraConnectionId::parse(&conn_id_str)
+            .map_err(|e| CliError::Usage(format!("Invalid connection ID: {}", e)))?;
+        let conn = get_aura_connection(&ctx.pool, &conn_id)
+            .await?
+            .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
+        let password = std::env::var(&conn.auth_env_var).map_err(|_| {
+            CliError::Usage(format!(
+                "Password environment variable '{}' is not set",
+                conn.auth_env_var
+            ))
+        })?;
+        let uri = relating_migrate::BoltUri::parse(&conn.uri).map_err(CliError::Migrate)?;
+        let mut config = relating_migrate::BoltConfig::new(uri, conn.username.clone(), password);
+        config.database = conn.database.clone();
+        let backend = relating_migrate::BoltBackend::new(config);
+        let pairs: Vec<(String, String)> = queries
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let name = q
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let cypher = q
+                    .get("cypher")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if name.is_empty() {
+                    (format!("query-{}", i + 1), cypher)
+                } else {
+                    (name, cypher)
+                }
+            })
+            .collect();
+        Some(
+            relating_advisor::measure_target(&backend, &pairs)
+                .await
+                .map_err(CliError::Migrate)?,
+        )
+    } else {
+        None
+    };
+
+    match opts.format {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "queries": query_reports,
+                "structure": structure,
+                "sizing": sizing,
+                "measurements": measurements,
+            }))
+            .unwrap_or_default()
+        ),
+        OutputFormat::Text => {
+            for report in &query_reports {
+                println!("--- {} ---", report["name"].as_str().unwrap_or("?"));
+                for finding in report["findings"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "[{:?}] {}: {}",
+                        finding["severity"].as_str().unwrap_or("?"),
+                        finding["rule_id"].as_str().unwrap_or("?"),
+                        finding["message"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            println!("--- structure ---");
+            for note in &structure {
+                println!("[{:?}] {}: {}", note.severity, note.rule_id, note.message);
+            }
+            println!("--- sizing (estimate) ---");
+            println!("{}", sizing.tier_hint);
+        }
+    }
+
+    if flags.contains_key("fail-on-warning") && warning_count > 0 {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
+
+async fn cmd_demo_seed(
+    opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let name = flags
+        .get("name")
+        .cloned()
+        .unwrap_or_else(|| "demo".to_string());
+    let pool = init_db(&opts.database_url)
+        .await
+        .map_err(|e| CliError::Project(format!("Cannot open metadata database: {}", e)))?;
+
+    let now = chrono::Utc::now();
+    let project = relating_core::Project {
+        id: ProjectId::new(),
+        name: name.clone(),
+        description: "Seeded demo project (mock AI provider, offline-safe)".to_string(),
+        created_at: now,
+        updated_at: now,
+        ai_config: relating_core::AiProviderConfig::mock(),
+    };
+    relating_metadata::insert_project(&pool, &project).await?;
+
+    let graph_path = opts
+        .data_dir
+        .join("projects")
+        .join(project.id.to_string())
+        .join("graph.rl");
+    let graph = relating_graph::RelateBackend::new();
+    graph.ensure_store(&graph_path)?;
+    graph.execute_write(
+        &graph_path,
+        "CREATE (a:City {uid: 'City:1', name: 'Lisbon'})-[:CONNECTED]->(b:City {uid: 'City:2', name: 'Porto'})",
+        std::collections::HashMap::new(),
+    )?;
+
+    match opts.format {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "project_id": project.id.to_string(),
+                "name": project.name,
+            }))
+            .unwrap_or_default()
+        ),
+        OutputFormat::Text => {
+            println!("Seeded demo project '{}'", project.name);
+            println!("project_id: {}", project.id);
+        }
+    }
+    Ok(0)
+}
+
 #[tokio::main]
 async fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -625,6 +900,9 @@ async fn main() {
             ["eval", "run"] => cmd_eval_run(&opts, &flags).await,
             ["shadow", "run"] => cmd_shadow_run(&opts, &flags).await,
             ["debug", "trace"] => cmd_debug_trace(&opts, &flags).await,
+            ["synth", "generate"] => cmd_synth_generate(&opts, &flags).await,
+            ["advisor", "analyze"] => cmd_advisor_analyze(&opts, &flags).await,
+            ["demo", "seed"] => cmd_demo_seed(&opts, &flags).await,
             _ => Err(CliError::Usage(format!(
                 "Unknown command: {}",
                 positionals.join(" ")

@@ -44,6 +44,12 @@ pub enum AppError {
     #[error("Debug error: {0}")]
     Debug(#[from] relating_debug::DebugError),
 
+    #[error("Synth error: {0}")]
+    Synth(#[from] relating_synth::SynthError),
+
+    #[error("Advisor error: {0}")]
+    Advisor(#[from] relating_advisor::AdvisorError),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -99,6 +105,8 @@ impl IntoResponse for AppError {
             AppError::Port(err) => (StatusCode::BAD_REQUEST, "PORTABILITY_ERROR", err.to_string()),
             AppError::Shadow(err) => (StatusCode::BAD_REQUEST, "SHADOW_ERROR", err.to_string()),
             AppError::Debug(err) => (StatusCode::BAD_REQUEST, "DEBUG_ERROR", err.to_string()),
+            AppError::Synth(err) => (StatusCode::BAD_REQUEST, "SYNTH_ERROR", err.to_string()),
+            AppError::Advisor(err) => (StatusCode::BAD_REQUEST, "ADVISOR_ERROR", err.to_string()),
             other => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

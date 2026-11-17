@@ -2177,6 +2177,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "relating-advisor"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "relating-core",
+ "relating-graph",
+ "relating-migrate",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "relating-ai"
 version = "0.1.0"
 dependencies = [
@@ -2195,6 +2211,7 @@ name = "relating-cli"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "relating-advisor",
  "relating-ai",
  "relating-core",
  "relating-debug",
@@ -2204,6 +2221,7 @@ dependencies = [
  "relating-retrieval",
  "relating-schema",
  "relating-shadow",
+ "relating-synth",
  "serde",
  "serde_json",
  "tempfile",
@@ -2384,6 +2402,7 @@ dependencies = [
  "axum",
  "chrono",
  "http-body-util",
+ "relating-advisor",
  "relating-ai",
  "relating-core",
  "relating-debug",
@@ -2396,6 +2415,7 @@ dependencies = [
  "relating-retrieval",
  "relating-schema",
  "relating-shadow",
+ "relating-synth",
  "serde",
  "serde_json",
  "tempfile",
@@ -2419,6 +2439,20 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "relating-synth"
+version = "0.1.0"
+dependencies = [
+ "rand 0.9.5",
+ "relating-core",
+ "relating-graph",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
  "tracing",
 ]

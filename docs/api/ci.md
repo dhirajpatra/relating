@@ -23,11 +23,18 @@ usage or config error. All commands accept `--data-dir`, `--database-url`
   file against live state; exits 1 on breaking changes.
 - `relating eval run --project ID --questions FILE [--strategy S] [--min-grounded F]`
   — runs grounded Q&A per question (default hybrid, min grounded rate 0.5).
+- `relating demo seed [--name NAME]` — creates a seeded demo project (mock AI
+  provider, two connected cities) and prints its ID. Used by CI when no pinned
+  project is configured; handy for local smoke tests too.
 
 ## CI wiring
 
 See `.github/workflows/relating.yml`: checkout, stable Rust, build the CLI,
-then validate, schema-diff (against committed `relating/graph/schema.json`),
-contract tests, conditional Aura analysis (only when `AURA_PASSWORD` is set),
-and a conditional eval gate (only when `eval/questions.txt` exists). Failing
-gates fail the workflow and block the merge.
+resolve the project (the `RELATING_PROJECT_ID` variable when set, otherwise a
+freshly seeded demo project), then validate, schema-diff (only when
+`relating/graph/schema.json` is committed), contract tests, conditional Aura
+analysis (only when `AURA_PASSWORD` plus `AURA_CONNECTION_ID` are set), a
+conditional eval gate (only when `eval/questions.txt` exists), and a
+conditional shadow gate (only when `shadow/queries.json` exists alongside Aura
+credentials). Failing gates fail the workflow and block the merge; missing
+optionals skip quietly instead of failing on empty configuration.

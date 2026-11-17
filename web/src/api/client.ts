@@ -14,10 +14,14 @@ import {
   McpHealth,
   GeneratedTest,
   Migration,
+  AdvisorResponse,
   ApplyResponse,
   CreateRevisionResponse,
   DiffResponse,
+  EdgeCase,
   ExportResponse,
+  GenerateResponse,
+  GraphProfile,
   Ontology,
   OntologyStatusResponse,
   PlanResponse,
@@ -348,5 +352,37 @@ export const api = {
     request<DebugTraceResponse>(`/projects/${projectId}/debug/trace`, {
       method: 'POST',
       body: JSON.stringify({ question, strategy }),
+    }),
+
+  // R6 API endpoints
+  synthProfile: (projectId: string) =>
+    request<GraphProfile>(`/projects/${projectId}/synth/profile`, {
+      method: 'POST',
+    }),
+
+  synthGenerate: (
+    projectId: string,
+    payload: {
+      scale?: number;
+      seed?: number;
+      edge_cases?: EdgeCase[];
+      materialize?: boolean;
+      target_name?: string;
+    }
+  ) =>
+    request<GenerateResponse>(`/projects/${projectId}/synth/generate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  advisorAnalyze: (
+    projectId: string,
+    queries: { name: string; cypher: string }[],
+    connectionId?: string,
+    measure?: boolean
+  ) =>
+    request<AdvisorResponse>(`/projects/${projectId}/advisor/analyze`, {
+      method: 'POST',
+      body: JSON.stringify({ queries, connection_id: connectionId, measure }),
     }),
 };

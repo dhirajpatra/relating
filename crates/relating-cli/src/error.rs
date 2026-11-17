@@ -35,6 +35,12 @@ pub enum CliError {
     #[error("Debug error: {0}")]
     Debug(#[from] relating_debug::DebugError),
 
+    #[error("Synth error: {0}")]
+    Synth(#[from] relating_synth::SynthError),
+
+    #[error("Advisor error: {0}")]
+    Advisor(#[from] relating_advisor::AdvisorError),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

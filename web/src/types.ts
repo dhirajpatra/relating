@@ -725,3 +725,104 @@ export interface DebugTraceResponse {
   trace: DebugTrace;
   diagnosis: Diagnosis;
 }
+
+// R6: synthetic data + advisor
+export type EdgeCase = 'duplicates' | 'orphans' | 'cycle' | 'invalid_values';
+
+export interface LabelProfile {
+  label: string;
+  count: number;
+  properties: { name: string; data_type: string; coverage: number }[];
+}
+
+export interface RelProfile {
+  rel_type: string;
+  count: number;
+  endpoints: { source_label: string; target_label: string }[];
+}
+
+export interface GraphProfile {
+  labels: LabelProfile[];
+  rel_types: RelProfile[];
+  total_nodes: number;
+  total_relationships: number;
+}
+
+export interface SynthStats {
+  node_count: number;
+  rel_count: number;
+  per_label: Record<string, number>;
+  per_type: Record<string, number>;
+  edge_cases_applied: string[];
+}
+
+export interface MaterializeOutcome {
+  nodes_created: number;
+  relationships_created: number;
+  properties_set: number;
+}
+
+export interface GenerateResponse {
+  profile_summary: {
+    labels: string[];
+    rel_types: string[];
+    total_nodes: number;
+    total_relationships: number;
+  };
+  stats: SynthStats;
+  notes: string[];
+  sample_nodes: unknown[];
+  sample_rels: unknown[];
+  target_project_id?: string;
+  materialized?: MaterializeOutcome;
+}
+
+export type AdvisorSeverity = 'info' | 'warning';
+
+export interface AdvisorQueryFinding {
+  rule_id: string;
+  severity: AdvisorSeverity;
+  message: string;
+  suggestion: string;
+}
+
+export interface AdvisorQueryReport {
+  name: string;
+  findings: AdvisorQueryFinding[];
+}
+
+export interface StructureNote {
+  rule_id: string;
+  severity: AdvisorSeverity;
+  message: string;
+  suggestion: string;
+  basis: string;
+}
+
+export interface SizingEstimate {
+  tier_hint: string;
+  estimated_elements: number;
+  estimated_storage_mb: number;
+  assumptions: string[];
+  caveats: string[];
+}
+
+export interface PlanMeasurement {
+  query_name: string;
+  planned: boolean;
+  planning_ms: number;
+  error?: string;
+}
+
+export interface TargetMeasurements {
+  target_nodes: number;
+  target_relationships: number;
+  plans: PlanMeasurement[];
+}
+
+export interface AdvisorResponse {
+  queries: AdvisorQueryReport[];
+  structure: StructureNote[];
+  sizing: SizingEstimate;
+  measurements?: TargetMeasurements;
+}
