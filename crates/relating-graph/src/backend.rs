@@ -25,6 +25,8 @@ pub trait GraphBackend: Send + Sync {
         params: HashMap<String, serde_json::Value>,
     ) -> Result<GraphWriteResult, GraphError>;
     fn get_schema(&self, store_path: &Path) -> Result<GraphSchemaInfo, GraphError>;
+    fn get_label_counts(&self, store_path: &Path) -> Result<Vec<(String, u64)>, GraphError>;
+    fn get_rel_type_counts(&self, store_path: &Path) -> Result<Vec<(String, u64)>, GraphError>;
     fn get_cytoscape_elements(
         &self,
         store_path: &Path,
@@ -205,7 +207,9 @@ impl GraphBackend for RelateBackend {
 
         // Get labels
         let mut labels = Vec::new();
-        if let Ok(res) = conn.query("MATCH (n) UNWIND labels(n) AS l RETURN DISTINCT l AS label LIMIT 100") {
+        if let Ok(res) =
+            conn.query("MATCH (n) UNWIND labels(n) AS l RETURN DISTINCT l AS label LIMIT 100")
+        {
             for row in res.rows {
                 if let Some(Value::String(s)) = row.first() {
                     labels.push(s.to_string());
@@ -215,7 +219,9 @@ impl GraphBackend for RelateBackend {
 
         // Get relationship types
         let mut relationship_types = Vec::new();
-        if let Ok(res) = conn.query("MATCH ()-[r]->() RETURN DISTINCT type(r) AS rel_type LIMIT 100") {
+        if let Ok(res) =
+            conn.query("MATCH ()-[r]->() RETURN DISTINCT type(r) AS rel_type LIMIT 100")
+        {
             for row in res.rows {
                 if let Some(Value::String(s)) = row.first() {
                     relationship_types.push(s.to_string());
@@ -230,6 +236,60 @@ impl GraphBackend for RelateBackend {
             relationship_count,
             property_keys: Vec::new(),
         })
+    }
+
+    fn get_label_counts(&self, store_path: &Path) -> Result<Vec<(String, u64)>, GraphError> {
+        let uri = store_path
+            .to_str()
+            .ok_or_else(|| GraphError::Storage("Invalid non-UTF8 path".to_string()))?;
+
+        if !store_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let db = Database::open_read_only(uri)?;
+        let mut conn = db.connect()?;
+
+        let mut out = Vec::new();
+        if let Ok(res) = conn
+            .query("MATCH (n) UNWIND labels(n) AS l RETURN l AS label, count(n) AS c LIMIT 1000")
+        {
+            for row in res.rows {
+                if let (Some(Value::String(label)), Some(Value::Int(count))) =
+                    (row.first(), row.get(1))
+                {
+                    out.push((label.to_string(), *count as u64));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn get_rel_type_counts(&self, store_path: &Path) -> Result<Vec<(String, u64)>, GraphError> {
+        let uri = store_path
+            .to_str()
+            .ok_or_else(|| GraphError::Storage("Invalid non-UTF8 path".to_string()))?;
+
+        if !store_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let db = Database::open_read_only(uri)?;
+        let mut conn = db.connect()?;
+
+        let mut out = Vec::new();
+        if let Ok(res) =
+            conn.query("MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS c LIMIT 1000")
+        {
+            for row in res.rows {
+                if let (Some(Value::String(rel_type)), Some(Value::Int(count))) =
+                    (row.first(), row.get(1))
+                {
+                    out.push((rel_type.to_string(), *count as u64));
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn get_cytoscape_elements(
@@ -258,7 +318,11 @@ impl GraphBackend for RelateBackend {
             for row in res.rows {
                 if let Some(Value::Node(node)) = row.first() {
                     let id_str = node.id.to_string();
-                    let label = node.labels.first().map(|l| l.to_string()).unwrap_or_else(|| "Node".to_string());
+                    let label = node
+                        .labels
+                        .first()
+                        .map(|l| l.to_string())
+                        .unwrap_or_else(|| "Node".to_string());
 
                     let mut props = HashMap::new();
                     for (k, v) in node.properties.iter() {
@@ -335,23 +399,27 @@ mod tests {
         backend.ensure_store(&store_b).unwrap();
 
         // Write node in Store A
-        let write_a = backend.execute_write(
-            &store_a,
-            "CREATE (n:Person {name: $name, age: $age})",
-            HashMap::from([
-                ("name".to_string(), serde_json::json!("Alice")),
-                ("age".to_string(), serde_json::json!(30)),
-            ]),
-        ).unwrap();
+        let write_a = backend
+            .execute_write(
+                &store_a,
+                "CREATE (n:Person {name: $name, age: $age})",
+                HashMap::from([
+                    ("name".to_string(), serde_json::json!("Alice")),
+                    ("age".to_string(), serde_json::json!(30)),
+                ]),
+            )
+            .unwrap();
         assert_eq!(write_a.nodes_created, 1);
 
         // Read from Store A
-        let read_a = backend.execute_read(
-            &store_a,
-            "MATCH (n:Person) RETURN n.name AS name, n.age AS age",
-            HashMap::new(),
-            None,
-        ).unwrap();
+        let read_a = backend
+            .execute_read(
+                &store_a,
+                "MATCH (n:Person) RETURN n.name AS name, n.age AS age",
+                HashMap::new(),
+                None,
+            )
+            .unwrap();
         assert_eq!(read_a.row_count, 1);
         assert_eq!(read_a.rows[0]["name"], "Alice");
         assert_eq!(read_a.rows[0]["age"], 30);
@@ -360,12 +428,9 @@ mod tests {
         let schema_b = backend.get_schema(&store_b).unwrap();
         assert_eq!(schema_b.node_count, 0);
 
-        let read_b = backend.execute_read(
-            &store_b,
-            "MATCH (n) RETURN n",
-            HashMap::new(),
-            None,
-        ).unwrap();
+        let read_b = backend
+            .execute_read(&store_b, "MATCH (n) RETURN n", HashMap::new(), None)
+            .unwrap();
         assert_eq!(read_b.row_count, 0);
     }
 
@@ -378,12 +443,7 @@ mod tests {
         backend.ensure_store(&store).unwrap();
 
         // Attempting to write inside execute_read must fail because store is opened read-only
-        let res = backend.execute_read(
-            &store,
-            "CREATE (n:Malicious)",
-            HashMap::new(),
-            None,
-        );
+        let res = backend.execute_read(&store, "CREATE (n:Malicious)", HashMap::new(), None);
         assert!(res.is_err(), "Write in read-only query must fail");
     }
 }

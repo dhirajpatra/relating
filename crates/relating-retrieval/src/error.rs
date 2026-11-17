@@ -14,6 +14,12 @@ pub enum RetrievalError {
     #[error("Evaluation error: {0}")]
     Evaluation(String),
 
+    #[error("AI error: {0}")]
+    Ai(#[from] relating_ai::AiError),
+
+    #[error("Core error: {0}")]
+    Core(#[from] relating_core::RelatingError),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

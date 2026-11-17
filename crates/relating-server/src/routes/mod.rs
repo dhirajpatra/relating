@@ -1,10 +1,12 @@
 pub mod ai;
+pub mod aura;
 pub mod cypher;
 pub mod embeddings;
 pub mod evaluations;
 pub mod graph;
 pub mod health;
 pub mod ingest;
+pub mod migrations;
 pub mod ontology;
 pub mod projects;
 pub mod questions;
@@ -92,7 +94,62 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/projects/:id/evaluations/:eval_id",
             get(evaluations::get_evaluation_handler),
+        )
+        // R1: Aura connections and migration workflow
+        .route(
+            "/projects/:id/connections/aura",
+            get(aura::list_connections_handler).post(aura::create_connection_handler),
+        )
+        .route(
+            "/projects/:id/connections/aura/:conn_id",
+            delete(aura::delete_connection_handler),
+        )
+        .route(
+            "/projects/:id/connections/aura/:conn_id/test",
+            post(aura::test_connection_handler),
+        )
+        .route(
+            "/projects/:id/migrations/analyze",
+            post(migrations::analyze_migration_handler),
+        )
+        .route(
+            "/projects/:id/migrations/plan",
+            post(migrations::plan_migration_handler),
+        )
+        .route(
+            "/projects/:id/migrations",
+            get(migrations::list_migrations_handler),
+        )
+        .route(
+            "/projects/:id/migrations/:mid",
+            get(migrations::get_migration_handler),
+        )
+        .route(
+            "/projects/:id/migrations/:mid/dry-run",
+            post(migrations::dry_run_handler),
+        )
+        .route(
+            "/projects/:id/migrations/:mid/approve",
+            post(migrations::approve_migration_handler),
+        )
+        .route(
+            "/projects/:id/migrations/:mid/execute",
+            post(migrations::execute_migration_handler),
+        )
+        .route(
+            "/projects/:id/migrations/:mid/verify",
+            post(migrations::verify_migration_handler),
+        )
+        .route(
+            "/projects/:id/migrations/:mid/report",
+            get(migrations::get_migration_report_handler),
         );
+
+    let mcp_state = relating_mcp::protocol::McpState {
+        pool: state.pool.clone(),
+        graph: state.graph.clone(),
+        data_dir: state.data_dir.clone(),
+    };
 
     let router = Router::new().nest("/api/v1", api_routes);
 
@@ -107,7 +164,8 @@ pub fn create_router(state: AppState) -> Router {
     };
 
     router
+        .with_state(state)
+        .merge(relating_mcp::create_mcp_router(mcp_state))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
 }

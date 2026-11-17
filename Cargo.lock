@@ -2235,6 +2235,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "relating-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "http-body-util",
+ "relating-ai",
+ "relating-core",
+ "relating-graph",
+ "relating-metadata",
+ "relating-migrate",
+ "relating-retrieval",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "relating-metadata"
 version = "0.1.0"
 dependencies = [
@@ -2250,12 +2274,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "relating-migrate"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "relating-core",
+ "relating-graph",
+ "relating-metadata",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "uuid",
+ "webpki-roots",
+]
+
+[[package]]
 name = "relating-retrieval"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "relating-ai",
  "relating-core",
+ "relating-metadata",
  "serde",
  "serde_json",
  "sha2",
@@ -2274,7 +2320,9 @@ dependencies = [
  "relating-core",
  "relating-graph",
  "relating-ingest",
+ "relating-mcp",
  "relating-metadata",
+ "relating-migrate",
  "relating-retrieval",
  "serde",
  "serde_json",
@@ -2418,6 +2466,7 @@ version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",

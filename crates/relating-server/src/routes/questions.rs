@@ -1,5 +1,4 @@
 use crate::error::AppError;
-use crate::routes::retrieval::{run_retrieval, DEFAULT_TOP_K};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -10,8 +9,8 @@ use relating_core::{
 };
 use relating_metadata::get_project as db_get_project;
 use relating_retrieval::{
-    build_qa_request, extract_citation_markers, RetrievalError, INSUFFICIENT_EVIDENCE_MESSAGE,
-    RAG_PROMPT_VERSION,
+    build_qa_request, extract_citation_markers, run_retrieval, RetrievalError, DEFAULT_TOP_K,
+    INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -58,9 +57,9 @@ pub async fn ask_question_handler(
     let start_time = std::time::Instant::now();
 
     let trace = match run_retrieval(
-        &state,
-        &project,
+        &state.pool,
         &provider,
+        &project,
         &question,
         strategy.clone(),
         top_k,
@@ -69,7 +68,7 @@ pub async fn ask_question_handler(
     .await
     {
         Ok(trace) => trace,
-        Err(AppError::Retrieval(RetrievalError::NoEvidence(_))) => {
+        Err(RetrievalError::NoEvidence(_)) => {
             // Honest ungrounded answer: no evidence was retrieved, so the
             // model is never called and nothing is fabricated.
             return Ok(Json(QuestionAnswer {
@@ -93,7 +92,7 @@ pub async fn ask_question_handler(
                 latency_ms: start_time.elapsed().as_secs_f64() * 1000.0,
             }));
         }
-        Err(other) => return Err(other),
+        Err(other) => return Err(AppError::Retrieval(other)),
     };
 
     let chat_req = build_qa_request(&question, &trace.passages);

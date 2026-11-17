@@ -1,0 +1,32 @@
+[package]
+name = "relating-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "relating-mcp"
+path = "src/main.rs"
+
+[dependencies]
+relating-core = { workspace = true }
+relating-metadata = { workspace = true }
+relating-graph = { workspace = true }
+relating-ai = { workspace = true }
+relating-retrieval = { workspace = true }
+relating-migrate = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+chrono = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

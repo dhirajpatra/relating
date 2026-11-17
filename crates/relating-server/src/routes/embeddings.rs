@@ -218,8 +218,7 @@ pub async fn generate_embeddings_handler(
 
     // 5. Persist new chunks (unique on profile + content hash, so retries are safe)
     let mut chunks_created = 0usize;
-    for ((source_id, candidate), embedding) in to_embed.into_iter().zip(new_embeddings.into_iter())
-    {
+    for ((source_id, candidate), embedding) in to_embed.into_iter().zip(new_embeddings) {
         let chunk = Chunk {
             id: ChunkId::new(),
             project_id: project_id.clone(),

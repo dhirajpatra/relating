@@ -29,6 +29,9 @@ pub enum AppError {
     #[error("Retrieval error: {0}")]
     Retrieval(#[from] relating_retrieval::RetrievalError),
 
+    #[error("Migration error: {0}")]
+    Migrate(#[from] relating_migrate::MigrateError),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -64,9 +67,22 @@ impl IntoResponse for AppError {
                 err.to_string(),
             ),
             AppError::Ingest(err) => (StatusCode::BAD_REQUEST, "INGEST_ERROR", err.to_string()),
+            AppError::Retrieval(relating_retrieval::RetrievalError::Ai(err)) => (
+                StatusCode::BAD_GATEWAY,
+                "AI_PROVIDER_ERROR",
+                err.to_string(),
+            ),
             AppError::Retrieval(err) => {
                 (StatusCode::BAD_REQUEST, "RETRIEVAL_ERROR", err.to_string())
             }
+            AppError::Migrate(relating_migrate::MigrateError::Auth(msg)) => {
+                (StatusCode::BAD_GATEWAY, "AURA_AUTH_FAILED", msg.clone())
+            }
+            AppError::Migrate(relating_migrate::MigrateError::Connection(msg))
+            | AppError::Migrate(relating_migrate::MigrateError::Timeout(msg)) => {
+                (StatusCode::BAD_GATEWAY, "AURA_UNREACHABLE", msg.clone())
+            }
+            AppError::Migrate(err) => (StatusCode::BAD_REQUEST, "MIGRATION_ERROR", err.to_string()),
             other => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

@@ -272,3 +272,135 @@ export interface EvaluationRun {
   questions: QuestionEvaluation[];
   created_at: string;
 }
+
+// R1: Aura connections, migrations, MCP
+export interface AuraConnection {
+  id: string;
+  project_id: string;
+  name: string;
+  uri: string;
+  username: string;
+  database?: string;
+  auth_env_var: string;
+  created_at: string;
+}
+
+export interface ConnectionTestReport {
+  reachable: boolean;
+  server_agent?: string;
+  bolt_version?: string;
+  database?: string;
+  message: string;
+}
+
+export type CapabilityVerdict =
+  | 'SUPPORTED'
+  | 'RECREATE'
+  | 'TRANSFORM'
+  | 'UNSUPPORTED'
+  | 'REQUIRES_MANUAL_REVIEW';
+
+export interface CompatFinding {
+  category: string;
+  subject: string;
+  verdict: CapabilityVerdict;
+  detail: string;
+  remediation?: string;
+}
+
+export interface AnalyzeResponse {
+  source_findings: CompatFinding[];
+  target_findings: CompatFinding[];
+  target_reachable: boolean;
+  target_agent?: string;
+}
+
+export type BatchKind = 'nodes' | 'relationships';
+
+export interface BatchPlan {
+  kind: BatchKind;
+  name: string;
+  count: number;
+  batch_size: number;
+  batch_count: number;
+}
+
+export interface MigrationPlan {
+  node_batches: BatchPlan[];
+  rel_batches: BatchPlan[];
+  ddl_statements: string[];
+  warnings: string[];
+  total_nodes: number;
+  total_relationships: number;
+  total_batches: number;
+}
+
+export interface DryRunReport {
+  plan: MigrationPlan;
+  target_reachable: boolean;
+  target_agent?: string;
+  remote_writes: number;
+  blockers: string[];
+}
+
+export type MigrationStatus =
+  | 'draft'
+  | 'analyzed'
+  | 'planned'
+  | 'approved'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'verified';
+
+export interface MigrationProgress {
+  batches_done: number;
+  batches_total: number;
+  nodes_migrated: number;
+  relationships_migrated: number;
+  completed_batches: string[];
+  message?: string;
+}
+
+export interface Migration {
+  id: string;
+  project_id: string;
+  connection_id: string;
+  status: MigrationStatus;
+  plan: MigrationPlan;
+  progress: MigrationProgress;
+  report: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlanResponse {
+  migration: Migration;
+  dry_run: DryRunReport;
+}
+
+export interface CountCheck {
+  kind: string;
+  name: string;
+  source_count: number;
+  target_count: number;
+  matched: boolean;
+}
+
+export interface VerificationReport {
+  checks: CountCheck[];
+  samples_checked: number;
+  samples_matched: number;
+  passed: boolean;
+  details: string[];
+}
+
+export interface McpHealth {
+  status: string;
+  server: string;
+  version: string;
+  protocol_version: string;
+  tools: number;
+  mode: string;
+}

@@ -1,14 +1,21 @@
 import {
   AiHealthReport,
+  AnalyzeResponse,
+  AuraConnection,
+  ConnectionTestReport,
   CreateProjectRequest,
   CytoscapeGraph,
+  DryRunReport,
   EmbeddingStatusResponse,
   EvaluationRun,
   GenerateEmbeddingsResponse,
   GraphQueryResult,
   IngestionResultResponse,
+  McpHealth,
+  Migration,
   Ontology,
   OntologyStatusResponse,
+  PlanResponse,
   Project,
   ProjectDetail,
   ProjectSummary,
@@ -17,6 +24,7 @@ import {
   RetrievalTrace,
   Source,
   SystemHealth,
+  VerificationReport,
 } from '../types';
 
 const BASE_URL = '/api/v1';
@@ -169,4 +177,85 @@ export const api = {
 
   listEvaluations: (projectId: string) =>
     request<EvaluationRun[]>(`/projects/${projectId}/evaluations`),
+
+  // R1 API endpoints
+  listAuraConnections: (projectId: string) =>
+    request<AuraConnection[]>(`/projects/${projectId}/connections/aura`),
+
+  createAuraConnection: (
+    projectId: string,
+    payload: {
+      name: string;
+      uri: string;
+      username?: string;
+      database?: string;
+      auth_env_var?: string;
+    }
+  ) =>
+    request<AuraConnection>(`/projects/${projectId}/connections/aura`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteAuraConnection: async (projectId: string, connectionId: string) => {
+    const res = await fetch(`${BASE_URL}/projects/${projectId}/connections/aura/${connectionId}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to delete connection: HTTP ${res.status}`);
+    }
+  },
+
+  testAuraConnection: (projectId: string, connectionId: string) =>
+    request<ConnectionTestReport>(
+      `/projects/${projectId}/connections/aura/${connectionId}/test`,
+      { method: 'POST' }
+    ),
+
+  analyzeMigration: (projectId: string, connectionId?: string) =>
+    request<AnalyzeResponse>(`/projects/${projectId}/migrations/analyze`, {
+      method: 'POST',
+      body: JSON.stringify({ connection_id: connectionId }),
+    }),
+
+  planMigration: (projectId: string, connectionId: string, batchSize?: number) =>
+    request<PlanResponse>(`/projects/${projectId}/migrations/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ connection_id: connectionId, batch_size: batchSize }),
+    }),
+
+  listMigrations: (projectId: string) =>
+    request<Migration[]>(`/projects/${projectId}/migrations`),
+
+  getMigration: (projectId: string, migrationId: string) =>
+    request<Migration>(`/projects/${projectId}/migrations/${migrationId}`),
+
+  dryRunMigration: (projectId: string, migrationId: string) =>
+    request<DryRunReport>(`/projects/${projectId}/migrations/${migrationId}/dry-run`, {
+      method: 'POST',
+    }),
+
+  approveMigration: (projectId: string, migrationId: string, approved: boolean) =>
+    request<Migration>(`/projects/${projectId}/migrations/${migrationId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ approved }),
+    }),
+
+  executeMigration: (projectId: string, migrationId: string) =>
+    request<Migration>(`/projects/${projectId}/migrations/${migrationId}/execute`, {
+      method: 'POST',
+    }),
+
+  verifyMigration: (projectId: string, migrationId: string) =>
+    request<VerificationReport>(`/projects/${projectId}/migrations/${migrationId}/verify`, {
+      method: 'POST',
+    }),
+
+  mcpHealth: async (): Promise<McpHealth> => {
+    const res = await fetch('/mcp/health');
+    if (!res.ok) {
+      throw new Error(`MCP health check failed: HTTP ${res.status}`);
+    }
+    return res.json() as Promise<McpHealth>;
+  },
 };

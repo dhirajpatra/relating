@@ -541,3 +541,122 @@ pub struct EvaluationRun {
     pub questions: Vec<QuestionEvaluation>,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AuraConnectionId(pub Uuid);
+
+impl AuraConnectionId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for AuraConnectionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for AuraConnectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuraConnection {
+    pub id: AuraConnectionId,
+    pub project_id: ProjectId,
+    pub name: String,
+    pub uri: String,
+    pub username: String,
+    #[serde(default)]
+    pub database: Option<String>,
+    /// Name of the environment variable holding the password at runtime.
+    /// Secrets are never stored in the database.
+    pub auth_env_var: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MigrationId(pub Uuid);
+
+impl MigrationId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for MigrationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for MigrationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationStatus {
+    Draft,
+    Analyzed,
+    Planned,
+    Approved,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Verified,
+}
+
+impl Default for MigrationStatus {
+    fn default() -> Self {
+        Self::Draft
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MigrationProgress {
+    #[serde(default)]
+    pub batches_done: usize,
+    #[serde(default)]
+    pub batches_total: usize,
+    #[serde(default)]
+    pub nodes_migrated: u64,
+    #[serde(default)]
+    pub relationships_migrated: u64,
+    #[serde(default)]
+    pub completed_batches: Vec<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Migration {
+    pub id: MigrationId,
+    pub project_id: ProjectId,
+    pub connection_id: AuraConnectionId,
+    pub status: MigrationStatus,
+    #[serde(default)]
+    pub plan: serde_json::Value,
+    #[serde(default)]
+    pub progress: MigrationProgress,
+    #[serde(default)]
+    pub report: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}

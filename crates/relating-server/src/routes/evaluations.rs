@@ -1,5 +1,4 @@
 use crate::error::AppError;
-use crate::routes::retrieval::{run_retrieval, DEFAULT_TOP_K};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -15,7 +14,8 @@ use relating_metadata::{
 };
 use relating_retrieval::{
     aggregate_metrics, build_qa_request, citation_precision, extract_citation_markers,
-    EVAL_METRICS_VERSION, RetrievalError, INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
+    run_retrieval, RetrievalError, DEFAULT_TOP_K, EVAL_METRICS_VERSION,
+    INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -68,9 +68,9 @@ pub async fn create_evaluation_handler(
         }
 
         let trace = match run_retrieval(
-            &state,
-            &project,
+            &state.pool,
             &provider,
+            &project,
             question,
             strategy.clone(),
             top_k,
@@ -79,7 +79,7 @@ pub async fn create_evaluation_handler(
         .await
         {
             Ok(trace) => trace,
-            Err(AppError::Retrieval(RetrievalError::NoEvidence(_))) => {
+            Err(RetrievalError::NoEvidence(_)) => {
                 evaluated.push(QuestionEvaluation {
                     question: question.to_string(),
                     answer: INSUFFICIENT_EVIDENCE_MESSAGE.to_string(),
@@ -91,7 +91,7 @@ pub async fn create_evaluation_handler(
                 });
                 continue;
             }
-            Err(other) => return Err(other),
+            Err(other) => return Err(AppError::Retrieval(other)),
         };
 
         let answer_start = std::time::Instant::now();

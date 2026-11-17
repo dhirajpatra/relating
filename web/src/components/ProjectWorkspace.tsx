@@ -7,7 +7,9 @@ import {
   ProjectDetail,
   Source,
 } from '../types';
+import { AuraMigration } from './AuraMigration';
 import { GraphExplorer } from './GraphExplorer';
+import { McpConnect } from './McpConnect';
 import { OntologyReview } from './OntologyReview';
 import { RetrievalWorkbench } from './RetrievalWorkbench';
 import { SourceManager } from './SourceManager';
@@ -23,7 +25,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   const [ontologyStatus, setOntologyStatus] = useState<OntologyStatusResponse>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai' | 'retrieval'>('sources');
+  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai' | 'retrieval' | 'agents' | 'aura'>('sources');
 
   // Cypher workbench state
   const [query, setQuery] = useState('MATCH (n) RETURN n LIMIT 25');
@@ -270,6 +272,8 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
           { id: 'cypher', label: '4. Cypher Console' },
           { id: 'ai', label: '5. AI Service' },
           { id: 'retrieval', label: '6. Retrieval & Q&A' },
+          { id: 'agents', label: '7. Agents' },
+          { id: 'aura', label: '8. Aura Migration' },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -516,6 +520,12 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
       {activeTab === 'retrieval' && (
         <RetrievalWorkbench projectId={projectId} hasSources={sources.length > 0} />
       )}
+
+      {activeTab === 'agents' && (
+        <McpConnect projectId={projectId} projectName={project.name} />
+      )}
+
+      {activeTab === 'aura' && <AuraMigration projectId={projectId} />}
 
       {activeTab === 'ai' && (
         <div

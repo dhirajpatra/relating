@@ -47,6 +47,7 @@ pub const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial_schema
 pub const SOURCES_AND_ONTOLOGIES_SCHEMA: &str =
     include_str!("../migrations/0002_sources_and_ontologies.sql");
 pub const RETRIEVAL_SCHEMA: &str = include_str!("../migrations/0003_retrieval.sql");
+pub const MIGRATION_SCHEMA: &str = include_str!("../migrations/0004_migration.sql");
 
 pub async fn run_migrations(pool: &DbPool) -> Result<(), RelatingError> {
     sqlx::raw_sql(INITIAL_SCHEMA)
@@ -63,6 +64,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), RelatingError> {
         .execute(pool)
         .await
         .map_err(|e| RelatingError::Database(format!("Migration 0003 failed: {}", e)))?;
+
+    sqlx::raw_sql(MIGRATION_SCHEMA)
+        .execute(pool)
+        .await
+        .map_err(|e| RelatingError::Database(format!("Migration 0004 failed: {}", e)))?;
 
     Ok(())
 }
