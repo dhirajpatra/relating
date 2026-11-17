@@ -536,6 +536,7 @@ pub struct EvaluationRun {
     pub chat_model: String,
     pub embedding_model: String,
     pub prompt_version: String,
+    pub metrics_version: String,
     pub metrics: EvaluationMetrics,
     pub questions: Vec<QuestionEvaluation>,
     pub created_at: DateTime<Utc>,

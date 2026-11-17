@@ -1,5 +1,9 @@
 use relating_core::{EvaluationMetrics, QuestionEvaluation};
 
+/// Version of the evaluation metric definitions (grounded rate, citation
+/// precision, latencies). Persisted on every run so reports stay comparable.
+pub const EVAL_METRICS_VERSION: &str = "rag-eval-v1";
+
 /// Fraction of cited passages that were actually retrieved (valid markers).
 /// A question with no citations scores 0.0: an uncited answer is ungrounded.
 pub fn citation_precision(cited_markers: &[u32], retrieved_count: usize) -> f32 {

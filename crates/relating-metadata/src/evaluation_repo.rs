@@ -32,8 +32,8 @@ pub async fn insert_evaluation(
 
     sqlx::query(
         r#"
-        INSERT INTO evaluations (id, project_id, strategy, chat_model, embedding_model, prompt_version, metrics_json, questions_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO evaluations (id, project_id, strategy, chat_model, embedding_model, prompt_version, metrics_version, metrics_json, questions_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(run.id.to_string())
@@ -42,6 +42,7 @@ pub async fn insert_evaluation(
     .bind(&run.chat_model)
     .bind(&run.embedding_model)
     .bind(&run.prompt_version)
+    .bind(&run.metrics_version)
     .bind(metrics_json)
     .bind(questions_json)
     .bind(run.created_at.to_rfc3339())
@@ -59,6 +60,7 @@ fn map_evaluation_row(row: sqlx::sqlite::SqliteRow) -> Result<EvaluationRun, Rel
     let chat_model: String = row.get("chat_model");
     let embedding_model: String = row.get("embedding_model");
     let prompt_version: String = row.get("prompt_version");
+    let metrics_version: String = row.get("metrics_version");
     let metrics_json: String = row.get("metrics_json");
     let questions_json: String = row.get("questions_json");
     let created_at_str: String = row.get("created_at");
@@ -83,6 +85,7 @@ fn map_evaluation_row(row: sqlx::sqlite::SqliteRow) -> Result<EvaluationRun, Rel
         chat_model,
         embedding_model,
         prompt_version,
+        metrics_version,
         metrics,
         questions,
         created_at,
@@ -95,7 +98,7 @@ pub async fn get_evaluation(
 ) -> Result<Option<EvaluationRun>, RelatingError> {
     let row = sqlx::query(
         r#"
-        SELECT id, project_id, strategy, chat_model, embedding_model, prompt_version, metrics_json, questions_json, created_at
+        SELECT id, project_id, strategy, chat_model, embedding_model, prompt_version, metrics_version, metrics_json, questions_json, created_at
         FROM evaluations
         WHERE id = ?
         "#,
@@ -117,7 +120,7 @@ pub async fn list_evaluations(
 ) -> Result<Vec<EvaluationRun>, RelatingError> {
     let rows = sqlx::query(
         r#"
-        SELECT id, project_id, strategy, chat_model, embedding_model, prompt_version, metrics_json, questions_json, created_at
+        SELECT id, project_id, strategy, chat_model, embedding_model, prompt_version, metrics_version, metrics_json, questions_json, created_at
         FROM evaluations
         WHERE project_id = ?
         ORDER BY created_at DESC

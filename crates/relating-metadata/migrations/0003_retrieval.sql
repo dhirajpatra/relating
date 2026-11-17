@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS evaluations (
     chat_model TEXT NOT NULL,
     embedding_model TEXT NOT NULL,
     prompt_version TEXT NOT NULL,
+    metrics_version TEXT NOT NULL,
     metrics_json TEXT NOT NULL,
     questions_json TEXT NOT NULL,
     created_at TEXT NOT NULL,

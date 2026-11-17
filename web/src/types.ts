@@ -267,6 +267,7 @@ export interface EvaluationRun {
   chat_model: string;
   embedding_model: string;
   prompt_version: string;
+  metrics_version: string;
   metrics: EvaluationMetrics;
   questions: QuestionEvaluation[];
   created_at: string;

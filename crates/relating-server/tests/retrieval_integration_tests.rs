@@ -175,6 +175,8 @@ async fn test_embeddings_retrieval_qa_evaluation_lifecycle() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(run["metrics"]["question_count"], 2);
     assert_eq!(run["metrics"]["grounded_count"], 2);
+    assert_eq!(run["prompt_version"], "rag-qa-v1");
+    assert_eq!(run["metrics_version"], "rag-eval-v1");
     assert_eq!(run["questions"].as_array().unwrap().len(), 2);
     let eval_id = run["id"].as_str().unwrap().to_string();
 

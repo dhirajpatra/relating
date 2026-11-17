@@ -15,7 +15,7 @@ use relating_metadata::{
 };
 use relating_retrieval::{
     aggregate_metrics, build_qa_request, citation_precision, extract_citation_markers,
-    RetrievalError, INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
+    EVAL_METRICS_VERSION, RetrievalError, INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -118,6 +118,7 @@ pub async fn create_evaluation_handler(
         chat_model: project.ai_config.chat_model.clone(),
         embedding_model: project.ai_config.embedding_model.clone(),
         prompt_version: RAG_PROMPT_VERSION.to_string(),
+        metrics_version: EVAL_METRICS_VERSION.to_string(),
         metrics: aggregate_metrics(&evaluated),
         questions: evaluated,
         created_at: Utc::now(),
