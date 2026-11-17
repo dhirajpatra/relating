@@ -12,16 +12,25 @@ import {
   GraphQueryResult,
   IngestionResultResponse,
   McpHealth,
+  GeneratedTest,
   Migration,
+  ApplyResponse,
+  CreateRevisionResponse,
+  DiffResponse,
+  ExportResponse,
   Ontology,
   OntologyStatusResponse,
   PlanResponse,
   Project,
+  PortableReport,
   ProjectDetail,
   ProjectSummary,
   QuestionAnswer,
+  RunTestsResponse,
+  RetrievalConfigResponse,
   RetrievalStrategy,
   RetrievalTrace,
+  SchemaRevision,
   Source,
   SystemHealth,
   VerificationReport,
@@ -258,4 +267,61 @@ export const api = {
     }
     return res.json() as Promise<McpHealth>;
   },
+
+  // R2 API endpoints
+  exportSchema: (projectId: string) =>
+    request<ExportResponse>(`/projects/${projectId}/schema/export`),
+
+  createSchemaRevision: (projectId: string, document?: unknown) =>
+    request<CreateRevisionResponse>(`/projects/${projectId}/schema/revisions`, {
+      method: 'POST',
+      body: JSON.stringify({ document }),
+    }),
+
+  listSchemaRevisions: (projectId: string) =>
+    request<SchemaRevision[]>(`/projects/${projectId}/schema/revisions`),
+
+  diffSchema: (
+    projectId: string,
+    payload: { from_version?: number; to_version?: number; to_document?: unknown }
+  ) =>
+    request<DiffResponse>(`/projects/${projectId}/schema/diff`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  applySchema: (projectId: string, document: unknown) =>
+    request<ApplyResponse>(`/projects/${projectId}/schema/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ document }),
+    }),
+
+  getRetrievalConfig: (projectId: string) =>
+    request<RetrievalConfigResponse>(`/projects/${projectId}/retrieval-config`),
+
+  updateRetrievalConfig: (
+    projectId: string,
+    payload: { default_strategy?: RetrievalStrategy; default_top_k?: number }
+  ) =>
+    request<RetrievalConfigResponse>(`/projects/${projectId}/retrieval-config`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  // R3 API endpoints
+  scanRepo: (projectId: string, repoPath: string) =>
+    request<PortableReport>(`/projects/${projectId}/portability/scan`, {
+      method: 'POST',
+      body: JSON.stringify({ repo_path: repoPath }),
+    }),
+
+  runPortabilityTests: (
+    projectId: string,
+    connectionId: string,
+    tests: GeneratedTest[]
+  ) =>
+    request<RunTestsResponse>(`/projects/${projectId}/portability/run-tests`, {
+      method: 'POST',
+      body: JSON.stringify({ connection_id: connectionId, tests }),
+    }),
 };

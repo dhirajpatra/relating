@@ -46,7 +46,7 @@ pub fn escape_identifier(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
-fn constraint_ddl(label: &str, property: &str, major_version: Option<u32>) -> String {
+pub fn constraint_ddl(label: &str, property: &str, major_version: Option<u32>) -> String {
     let label = escape_identifier(label);
     let property = escape_identifier(property);
     match major_version {
@@ -59,6 +59,22 @@ fn constraint_ddl(label: &str, property: &str, major_version: Option<u32>) -> St
             label, property
         ),
     }
+}
+
+pub fn index_ddl(label: &str, properties: &[String]) -> Option<String> {
+    if properties.is_empty() {
+        return None;
+    }
+    let keys = properties
+        .iter()
+        .map(|p| format!("n.{}", escape_identifier(p)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "CREATE INDEX IF NOT EXISTS FOR (n:{}) ON ({})",
+        escape_identifier(label),
+        keys
+    ))
 }
 
 pub fn build_plan(

@@ -404,3 +404,200 @@ export interface McpHealth {
   tools: number;
   mode: string;
 }
+
+// R2: schema-as-code
+export interface UniqueConstraint {
+  label: string;
+  properties: string[];
+}
+
+export interface IndexDef {
+  label: string;
+  properties: string[];
+}
+
+export interface ProfileSpec {
+  name: string;
+  model: string;
+  dimensions: number;
+  modality: string;
+}
+
+export interface RetrievalSpec {
+  default_strategy: RetrievalStrategy;
+  default_top_k: number;
+}
+
+export interface SchemaDocument {
+  format_version: string;
+  project_name?: string;
+  ontology: OntologySchema;
+  constraints: UniqueConstraint[];
+  indexes: IndexDef[];
+  embedding_profiles: ProfileSpec[];
+  retrieval: RetrievalSpec;
+}
+
+export interface SchemaFile {
+  path: string;
+  content: string;
+}
+
+export interface ExportResponse {
+  files: SchemaFile[];
+  document: SchemaDocument;
+}
+
+export interface SchemaRevision {
+  id: string;
+  project_id: string;
+  version: number;
+  content_hash: string;
+  document: SchemaDocument;
+  created_at: string;
+}
+
+export interface CreateRevisionResponse {
+  revision: SchemaRevision;
+  created: boolean;
+}
+
+export type ChangeKind = 'added' | 'removed' | 'modified';
+
+export interface SchemaChange {
+  category: string;
+  subject: string;
+  kind: ChangeKind;
+  breaking: boolean;
+  detail: string;
+}
+
+export interface SchemaDiff {
+  changes: SchemaChange[];
+  breaking_count: number;
+}
+
+export interface MigrationProposal {
+  filename: string;
+  cypher: string[];
+  steps: string[];
+  notes: string[];
+}
+
+export interface DiffResponse {
+  diff: SchemaDiff;
+  proposal: MigrationProposal;
+}
+
+export interface ContractCheck {
+  subject: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface ConformanceReport {
+  checks: ContractCheck[];
+  passed: boolean;
+}
+
+export interface ApplyResponse {
+  revision: SchemaRevision;
+  diff?: SchemaDiff;
+  conformance: ConformanceReport;
+}
+
+export interface RetrievalConfigResponse {
+  configured: boolean;
+  default_strategy: RetrievalStrategy;
+  default_top_k: number;
+}
+
+// R3: portability compiler
+export type PortVerdict = 'PORTABLE' | 'TRANSFORM' | 'NEEDS_REWRITE' | 'NEEDS_REVIEW';
+
+export type SourceLanguage =
+  | 'python'
+  | 'typescript'
+  | 'javascript'
+  | 'java'
+  | 'go'
+  | 'rust'
+  | 'cypher'
+  | 'unknown';
+
+export interface QueryCandidate {
+  file: string;
+  line: number;
+  language: SourceLanguage;
+  query: string;
+}
+
+export type SignalKind =
+  | 'driver_import'
+  | 'connection_uri'
+  | 'transaction'
+  | 'apoc_usage'
+  | 'constraint_ddl'
+  | 'index_ddl';
+
+export interface CodeSignal {
+  file: string;
+  line: number;
+  kind: SignalKind;
+  text: string;
+}
+
+export interface PortFinding {
+  file: string;
+  line: number;
+  rule_id: string;
+  verdict: PortVerdict;
+  message: string;
+  remediation?: string;
+}
+
+export interface PortSummary {
+  files_scanned: number;
+  queries_total: number;
+  portable: number;
+  transform: number;
+  needs_rewrite: number;
+  needs_review: number;
+  signals_total: number;
+}
+
+export type TestAssertion =
+  | { type: 'no_error' }
+  | { type: 'row_count_eq'; expected: number }
+  | { type: 'row_count_gte'; expected: number };
+
+export interface GeneratedTest {
+  name: string;
+  file: string;
+  line: number;
+  cypher: string;
+  read_only: boolean;
+  assertion: TestAssertion;
+}
+
+export interface PortableReport {
+  summary: PortSummary;
+  findings: PortFinding[];
+  breaking: PortFinding[];
+  tests: GeneratedTest[];
+  tests_truncated: boolean;
+}
+
+export interface TestOutcome {
+  name: string;
+  passed: boolean;
+  detail: string;
+  row_count: number;
+  elapsed_ms: number;
+}
+
+export interface RunTestsResponse {
+  results: TestOutcome[];
+  passed: number;
+  failed: number;
+}

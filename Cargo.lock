@@ -2191,6 +2191,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "relating-cli"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "relating-ai",
+ "relating-core",
+ "relating-graph",
+ "relating-metadata",
+ "relating-migrate",
+ "relating-retrieval",
+ "relating-schema",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "relating-core"
 version = "0.1.0"
 dependencies = [
@@ -2295,6 +2315,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "relating-portability"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "relating-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "relating-retrieval"
 version = "0.1.0"
 dependencies = [
@@ -2307,6 +2340,24 @@ dependencies = [
  "sha2",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "relating-schema"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "relating-core",
+ "relating-graph",
+ "relating-metadata",
+ "relating-migrate",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2323,7 +2374,9 @@ dependencies = [
  "relating-mcp",
  "relating-metadata",
  "relating-migrate",
+ "relating-portability",
  "relating-retrieval",
+ "relating-schema",
  "serde",
  "serde_json",
  "tempfile",

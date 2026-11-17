@@ -19,6 +19,7 @@ pub use packstream::{
     BoltValue,
 };
 pub use plan::{
-    build_plan, dry_run, BatchKind, BatchPlan, DryRunReport, MigrationPlan, DEFAULT_BATCH_SIZE,
+    build_plan, constraint_ddl, dry_run, index_ddl, BatchKind, BatchPlan, DryRunReport,
+    MigrationPlan, DEFAULT_BATCH_SIZE,
 };
 pub use verify::{verify_migration, SampleExpectation, SourceCounts, VerificationReport};

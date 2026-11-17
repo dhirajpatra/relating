@@ -1,0 +1,45 @@
+# Relating graph validation: blocks merges when graph checks fail.
+#
+# Required setup:
+#   - Commit exported schema-as-code (relating schema export) under relating/.
+#   - Set the RELATING_PROJECT_ID variable to the validated project.
+#   - Optionally set the AURA_PASSWORD secret to include Aura analysis.
+# The workflow builds the relating CLI and runs every gate locally.
+name: Relating Graph Validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  graph-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build relating CLI
+        run: cargo build --release -p relating-cli
+
+      - name: Validate project (schema, contracts, integrity, index)
+        run: ./target/release/relating validate --project "${{ vars.RELATING_PROJECT_ID }}"
+
+      - name: Check schema-as-code diff
+        run: ./target/release/relating schema diff --project "${{ vars.RELATING_PROJECT_ID }}" --file relating/graph/schema.json
+
+      - name: Run graph contract tests
+        run: ./target/release/relating test graph --project "${{ vars.RELATING_PROJECT_ID }}"
+
+      - name: Check Aura compatibility
+        if: ${{ env.AURA_PASSWORD != '' }}
+        env:
+          AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
+        run: ./target/release/relating aura analyze --project "${{ vars.RELATING_PROJECT_ID }}" --connection "${{ vars.AURA_CONNECTION_ID }}"
+
+      - name: Run retrieval evaluation gate
+        if: hashFiles('eval/questions.txt') != ''
+        run: ./target/release/relating eval run --project "${{ vars.RELATING_PROJECT_ID }}" --questions eval/questions.txt --min-grounded 0.5

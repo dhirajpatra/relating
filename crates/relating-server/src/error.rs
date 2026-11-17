@@ -32,6 +32,12 @@ pub enum AppError {
     #[error("Migration error: {0}")]
     Migrate(#[from] relating_migrate::MigrateError),
 
+    #[error("Schema error: {0}")]
+    Schema(#[from] relating_schema::SchemaError),
+
+    #[error("Portability error: {0}")]
+    Port(#[from] relating_portability::PortError),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -83,6 +89,8 @@ impl IntoResponse for AppError {
                 (StatusCode::BAD_GATEWAY, "AURA_UNREACHABLE", msg.clone())
             }
             AppError::Migrate(err) => (StatusCode::BAD_REQUEST, "MIGRATION_ERROR", err.to_string()),
+            AppError::Schema(err) => (StatusCode::BAD_REQUEST, "SCHEMA_ERROR", err.to_string()),
+            AppError::Port(err) => (StatusCode::BAD_REQUEST, "PORTABILITY_ERROR", err.to_string()),
             other => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

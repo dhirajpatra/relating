@@ -8,9 +8,11 @@ pub mod health;
 pub mod ingest;
 pub mod migrations;
 pub mod ontology;
+pub mod portability;
 pub mod projects;
 pub mod questions;
 pub mod retrieval;
+pub mod schema;
 pub mod sources;
 
 use crate::state::AppState;
@@ -143,6 +145,31 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/projects/:id/migrations/:mid/report",
             get(migrations::get_migration_report_handler),
+        )
+        // R2: schema-as-code and retrieval configuration
+        .route("/projects/:id/schema/export", get(schema::export_schema_handler))
+        .route(
+            "/projects/:id/schema/revisions",
+            get(schema::list_revisions_handler).post(schema::create_revision_handler),
+        )
+        .route(
+            "/projects/:id/schema/revisions/:version",
+            get(schema::get_revision_handler),
+        )
+        .route("/projects/:id/schema/diff", post(schema::diff_schema_handler))
+        .route("/projects/:id/schema/apply", post(schema::apply_schema_handler))
+        .route(
+            "/projects/:id/retrieval-config",
+            get(schema::get_retrieval_config_handler).put(schema::update_retrieval_config_handler),
+        )
+        // R3: portability compiler
+        .route(
+            "/projects/:id/portability/scan",
+            post(portability::scan_repo_handler),
+        )
+        .route(
+            "/projects/:id/portability/run-tests",
+            post(portability::run_tests_handler),
         );
 
     let mcp_state = relating_mcp::protocol::McpState {

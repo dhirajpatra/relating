@@ -18,6 +18,8 @@ relating-ingest = { workspace = true }
 relating-retrieval = { workspace = true }
 relating-migrate = { workspace = true }
 relating-mcp = { workspace = true }
+relating-schema = { workspace = true }
+relating-portability = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { version = "0.5", features = ["util"] }

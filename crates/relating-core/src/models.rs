@@ -660,3 +660,63 @@ pub struct Migration {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SchemaRevisionId(pub Uuid);
+
+impl SchemaRevisionId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for SchemaRevisionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for SchemaRevisionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaRevision {
+    pub id: SchemaRevisionId,
+    pub project_id: ProjectId,
+    pub version: u32,
+    pub content_hash: String,
+    pub document: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalConfig {
+    pub project_id: ProjectId,
+    pub default_strategy: RetrievalStrategy,
+    #[serde(default = "default_retrieval_top_k")]
+    pub default_top_k: usize,
+    pub updated_at: DateTime<Utc>,
+}
+
+fn default_retrieval_top_k() -> usize {
+    5
+}
+
+impl Default for RetrievalConfig {
+    fn default() -> Self {
+        Self {
+            project_id: ProjectId::new(),
+            default_strategy: RetrievalStrategy::Hybrid,
+            default_top_k: 5,
+            updated_at: Utc::now(),
+        }
+    }
+}

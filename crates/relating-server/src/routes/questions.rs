@@ -7,7 +7,7 @@ use relating_core::{
     AnswerCitation, EmbeddingProfileId, ProjectId, QuestionAnswer, RetrievalStrategy,
     RetrievalTrace,
 };
-use relating_metadata::get_project as db_get_project;
+use relating_metadata::{get_project as db_get_project, get_retrieval_config};
 use relating_retrieval::{
     build_qa_request, extract_citation_markers, run_retrieval, RetrievalError, DEFAULT_TOP_K,
     INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
@@ -51,8 +51,9 @@ pub async fn ask_question_handler(
         return Err(AppError::BadRequest("Question cannot be empty".to_string()));
     }
 
-    let strategy = payload.strategy.unwrap_or_default();
-    let top_k = payload.top_k.unwrap_or(DEFAULT_TOP_K);
+    let stored = get_retrieval_config(&state.pool, &project_id).await?;
+    let strategy = payload.strategy.or_else(|| stored.as_ref().map(|c| c.default_strategy.clone())).unwrap_or_default();
+    let top_k = payload.top_k.or_else(|| stored.as_ref().map(|c| c.default_top_k)).unwrap_or(DEFAULT_TOP_K);
     let provider = create_ai_provider(&project.ai_config)?;
     let start_time = std::time::Instant::now();
 

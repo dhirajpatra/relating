@@ -9,6 +9,9 @@ members = [
     "crates/relating-retrieval",
     "crates/relating-migrate",
     "crates/relating-mcp",
+    "crates/relating-schema",
+    "crates/relating-portability",
+    "crates/relating-cli",
     "crates/relating-server",
 ]
 
@@ -40,6 +43,7 @@ sha2 = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 webpki-roots = "1.0"
+regex = "1.13"
 
 # Internal crates
 relating-core = { path = "crates/relating-core" }
@@ -50,3 +54,6 @@ relating-ingest = { path = "crates/relating-ingest" }
 relating-retrieval = { path = "crates/relating-retrieval" }
 relating-migrate = { path = "crates/relating-migrate" }
 relating-mcp = { path = "crates/relating-mcp" }
+relating-schema = { path = "crates/relating-schema" }
+relating-portability = { path = "crates/relating-portability" }
+relating-cli = { path = "crates/relating-cli" }

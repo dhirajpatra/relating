@@ -9,8 +9,8 @@ use relating_core::{
     EvaluationId, EvaluationRun, ProjectId, QuestionEvaluation, RetrievalStrategy,
 };
 use relating_metadata::{
-    get_evaluation as db_get_evaluation, get_project as db_get_project, insert_evaluation,
-    list_evaluations as db_list_evaluations,
+    get_evaluation as db_get_evaluation, get_project as db_get_project, get_retrieval_config,
+    insert_evaluation, list_evaluations as db_list_evaluations,
 };
 use relating_retrieval::{
     aggregate_metrics, build_qa_request, citation_precision, extract_citation_markers,
@@ -54,8 +54,9 @@ pub async fn create_evaluation_handler(
         )));
     }
 
-    let strategy = payload.strategy.unwrap_or_default();
-    let top_k = payload.top_k.unwrap_or(DEFAULT_TOP_K);
+    let stored = get_retrieval_config(&state.pool, &project_id).await?;
+    let strategy = payload.strategy.or_else(|| stored.as_ref().map(|c| c.default_strategy.clone())).unwrap_or_default();
+    let top_k = payload.top_k.or_else(|| stored.as_ref().map(|c| c.default_top_k)).unwrap_or(DEFAULT_TOP_K);
     let provider = create_ai_provider(&project.ai_config)?;
 
     let mut evaluated = Vec::with_capacity(payload.questions.len());

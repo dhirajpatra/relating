@@ -11,7 +11,9 @@ import { AuraMigration } from './AuraMigration';
 import { GraphExplorer } from './GraphExplorer';
 import { McpConnect } from './McpConnect';
 import { OntologyReview } from './OntologyReview';
+import { PortabilityWorkbench } from './PortabilityWorkbench';
 import { RetrievalWorkbench } from './RetrievalWorkbench';
+import { SchemaWorkbench } from './SchemaWorkbench';
 import { SourceManager } from './SourceManager';
 
 interface ProjectWorkspaceProps {
@@ -25,7 +27,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   const [ontologyStatus, setOntologyStatus] = useState<OntologyStatusResponse>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai' | 'retrieval' | 'agents' | 'aura'>('sources');
+  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai' | 'retrieval' | 'agents' | 'aura' | 'schema' | 'portability'>('sources');
 
   // Cypher workbench state
   const [query, setQuery] = useState('MATCH (n) RETURN n LIMIT 25');
@@ -274,6 +276,8 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
           { id: 'retrieval', label: '6. Retrieval & Q&A' },
           { id: 'agents', label: '7. Agents' },
           { id: 'aura', label: '8. Aura Migration' },
+          { id: 'schema', label: '9. Schema & Contracts' },
+          { id: 'portability', label: '10. Portability' },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -526,6 +530,10 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
       )}
 
       {activeTab === 'aura' && <AuraMigration projectId={projectId} />}
+
+      {activeTab === 'schema' && <SchemaWorkbench projectId={projectId} />}
+
+      {activeTab === 'portability' && <PortabilityWorkbench projectId={projectId} />}
 
       {activeTab === 'ai' && (
         <div

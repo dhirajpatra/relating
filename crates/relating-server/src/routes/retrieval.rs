@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use relating_ai::create_ai_provider;
 use relating_core::{ProjectId, RetrievalStrategy, RetrievalTrace};
-use relating_metadata::get_project as db_get_project;
+use relating_metadata::{get_project as db_get_project, get_retrieval_config};
 use relating_retrieval::{run_retrieval, DEFAULT_TOP_K};
 use serde::Deserialize;
 
@@ -36,13 +36,16 @@ pub async fn run_retrieval_handler(
     }
 
     let provider = create_ai_provider(&project.ai_config)?;
+    let stored = get_retrieval_config(&state.pool, &project_id).await?;
+    let strategy = payload.strategy.or_else(|| stored.as_ref().map(|c| c.default_strategy.clone())).unwrap_or_default();
+    let top_k = payload.top_k.or_else(|| stored.as_ref().map(|c| c.default_top_k)).unwrap_or(DEFAULT_TOP_K);
     let trace = run_retrieval(
         &state.pool,
         &provider,
         &project,
         payload.query.trim(),
-        payload.strategy.unwrap_or_default(),
-        payload.top_k.unwrap_or(DEFAULT_TOP_K),
+        strategy,
+        top_k,
         payload.profile_name.as_deref(),
     )
     .await?;
