@@ -4,13 +4,12 @@ use axum::extract::{Path, State};
 use axum::Json;
 use relating_ai::create_ai_provider;
 use relating_core::{
-    AnswerCitation, EmbeddingProfileId, ProjectId, QuestionAnswer, RetrievalStrategy,
-    RetrievalTrace,
+    EmbeddingProfileId, ProjectId, QuestionAnswer, RetrievalStrategy, RetrievalTrace,
 };
 use relating_metadata::{get_project as db_get_project, get_retrieval_config};
 use relating_retrieval::{
-    build_qa_request, extract_citation_markers, run_retrieval, RetrievalError, DEFAULT_TOP_K,
-    INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
+    build_citations, build_qa_request, extract_citation_markers, run_retrieval, RetrievalError,
+    DEFAULT_TOP_K, INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -23,15 +22,6 @@ pub struct QuestionRequest {
     pub top_k: Option<usize>,
     #[serde(default)]
     pub profile_name: Option<String>,
-}
-
-fn excerpt(content: &str, max_chars: usize) -> String {
-    let trimmed = content.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
-    }
-    let head: String = trimmed.chars().take(max_chars).collect();
-    format!("{}...", head)
 }
 
 pub async fn ask_question_handler(
@@ -100,18 +90,7 @@ pub async fn ask_question_handler(
     let chat_resp = provider.chat_completion(&chat_req).await?;
 
     let markers = extract_citation_markers(&chat_resp.content);
-    let mut citations = Vec::new();
-    for marker in markers {
-        if let Some(passage) = trace.passages.get((marker - 1) as usize) {
-            citations.push(AnswerCitation {
-                index: marker,
-                chunk_id: passage.chunk_id.clone(),
-                source_id: passage.source_id.clone(),
-                filename: passage.filename.clone(),
-                excerpt: excerpt(&passage.content, 200),
-            });
-        }
-    }
+    let (citations, _invalid_markers) = build_citations(&trace.passages, &markers);
 
     Ok(Json(QuestionAnswer {
         question,

@@ -38,6 +38,12 @@ pub enum AppError {
     #[error("Portability error: {0}")]
     Port(#[from] relating_portability::PortError),
 
+    #[error("Shadow error: {0}")]
+    Shadow(#[from] relating_shadow::ShadowError),
+
+    #[error("Debug error: {0}")]
+    Debug(#[from] relating_debug::DebugError),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -91,6 +97,8 @@ impl IntoResponse for AppError {
             AppError::Migrate(err) => (StatusCode::BAD_REQUEST, "MIGRATION_ERROR", err.to_string()),
             AppError::Schema(err) => (StatusCode::BAD_REQUEST, "SCHEMA_ERROR", err.to_string()),
             AppError::Port(err) => (StatusCode::BAD_REQUEST, "PORTABILITY_ERROR", err.to_string()),
+            AppError::Shadow(err) => (StatusCode::BAD_REQUEST, "SHADOW_ERROR", err.to_string()),
+            AppError::Debug(err) => (StatusCode::BAD_REQUEST, "DEBUG_ERROR", err.to_string()),
             other => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

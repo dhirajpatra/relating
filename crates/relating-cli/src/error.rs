@@ -29,6 +29,12 @@ pub enum CliError {
     #[error("Schema error: {0}")]
     Schema(#[from] relating_schema::SchemaError),
 
+    #[error("Shadow error: {0}")]
+    Shadow(#[from] relating_shadow::ShadowError),
+
+    #[error("Debug error: {0}")]
+    Debug(#[from] relating_debug::DebugError),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

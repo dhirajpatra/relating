@@ -601,3 +601,127 @@ export interface RunTestsResponse {
   passed: number;
   failed: number;
 }
+
+// R5: shadow testing + debugger
+export interface ShadowQuerySpec {
+  name: string;
+  cypher: string;
+  params?: Record<string, unknown>;
+}
+
+export type CompareVerdict = 'MATCH' | 'STRUCTURE_DIFF' | 'COUNT_DIFF' | 'ERROR_DIFF';
+export type Confidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface QueryComparison {
+  name: string;
+  verdict: CompareVerdict;
+  detail: string;
+  source_rows: number;
+  target_rows: number;
+  source_latency_ms: number;
+  target_latency_ms: number;
+  latency_ratio: number;
+}
+
+export interface ShadowSummary {
+  total: number;
+  matched: number;
+  structure_diffs: number;
+  count_diffs: number;
+  error_diffs: number;
+  source_success_rate: number;
+  target_success_rate: number;
+  confidence: Confidence;
+  confidence_reasons: string[];
+}
+
+export interface ShadowQueryEcho {
+  name: string;
+  cypher: string;
+  params: Record<string, unknown>;
+}
+
+export interface ShadowRunResponse {
+  report: {
+    comparisons: QueryComparison[];
+    summary: ShadowSummary;
+  };
+  queries: ShadowQueryEcho[];
+}
+
+export interface RankingRow {
+  rank: number;
+  chunk_id: string;
+  filename: string;
+  fused_score: number;
+  vector_rank?: number;
+  keyword_rank?: number;
+  content_snippet: string;
+}
+
+export interface LinkedNode {
+  uid: string;
+  labels: string[];
+  name?: string;
+}
+
+export interface GraphLink {
+  chunk_id: string;
+  filename: string;
+  lineage_ref?: string;
+  nodes: LinkedNode[];
+  relationship_types: string[];
+  note?: string;
+}
+
+export interface OntologyMapping {
+  label: string;
+  mapped_entity?: string;
+  ontology_relationships: string[];
+}
+
+export interface DebugTrace {
+  question: string;
+  strategy: RetrievalStrategy;
+  profile_name: string;
+  embedding_model: string;
+  dimensions: number;
+  passages: RetrievedPassage[];
+  ranking: RankingRow[];
+  graph_links: GraphLink[];
+  ontology_mapping: OntologyMapping[];
+  ontology_approved: boolean;
+  evidence_chars: number;
+  evidence_preview: string;
+  prompt_version: string;
+  answer: string;
+  grounded: boolean;
+  citations: AnswerCitation[];
+  invalid_markers: number;
+  chat_model: string;
+  latency_ms: number;
+}
+
+export type Severity = 'info' | 'warning';
+
+export interface DiagnosisRule {
+  code: string;
+  severity: Severity;
+  message: string;
+}
+
+export interface AiHypothesis {
+  text: string;
+  model: string;
+}
+
+export interface Diagnosis {
+  rules: DiagnosisRule[];
+  likely_causes: string[];
+  ai_hypothesis?: AiHypothesis;
+}
+
+export interface DebugTraceResponse {
+  trace: DebugTrace;
+  diagnosis: Diagnosis;
+}

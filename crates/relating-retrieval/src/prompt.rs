@@ -43,6 +43,38 @@ pub fn build_qa_request(question: &str, passages: &[RetrievedPassage]) -> ChatRe
     }
 }
 
+pub fn excerpt(content: &str, max_chars: usize) -> String {
+    let trimmed = content.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max_chars).collect();
+    format!("{}...", head)
+}
+
+/// Resolve 1-based markers against retrieved passages. Returns the valid
+/// citations plus the count of markers that point nowhere (hallucinated).
+pub fn build_citations(
+    passages: &[RetrievedPassage],
+    markers: &[u32],
+) -> (Vec<relating_core::AnswerCitation>, usize) {
+    let mut citations = Vec::new();
+    let mut invalid = 0usize;
+    for marker in markers {
+        match passages.get((*marker as usize).wrapping_sub(1)) {
+            Some(passage) if *marker >= 1 => citations.push(relating_core::AnswerCitation {
+                index: *marker,
+                chunk_id: passage.chunk_id.clone(),
+                source_id: passage.source_id.clone(),
+                filename: passage.filename.clone(),
+                excerpt: excerpt(&passage.content, 200),
+            }),
+            _ => invalid += 1,
+        }
+    }
+    (citations, invalid)
+}
+
 /// Extract 1-based citation markers like [1], [2] from answer text.
 pub fn extract_citation_markers(answer: &str) -> Vec<u32> {
     let mut markers = Vec::new();

@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod aura;
 pub mod cypher;
+pub mod debug;
 pub mod embeddings;
 pub mod evaluations;
 pub mod graph;
@@ -13,6 +14,7 @@ pub mod projects;
 pub mod questions;
 pub mod retrieval;
 pub mod schema;
+pub mod shadow;
 pub mod sources;
 
 use crate::state::AppState;
@@ -170,7 +172,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/projects/:id/portability/run-tests",
             post(portability::run_tests_handler),
-        );
+        )
+        // R5: shadow testing and graph debugger
+        .route("/projects/:id/shadow/runs", post(shadow::run_shadow_handler))
+        .route("/projects/:id/debug/trace", post(debug::debug_trace_handler));
 
     let mcp_state = relating_mcp::protocol::McpState {
         pool: state.pool.clone(),

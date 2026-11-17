@@ -279,6 +279,68 @@ async fn test_eval_run_with_mock_provider() {
 }
 
 #[tokio::test]
+async fn test_shadow_run_reports_unreachable_target() {
+    std::env::set_var("RELATING_TEST_CLI_SHADOW_PASSWORD", "test-password");
+    let fixture = setup_clean_project().await;
+    let pool = relating_metadata::init_db(&fixture.db_url).await.unwrap();
+    let conn = relating_core::AuraConnection {
+        id: relating_core::AuraConnectionId::new(),
+        project_id: ProjectId::parse(&fixture.project_id).unwrap(),
+        name: "down".to_string(),
+        uri: "bolt://127.0.0.1:9".to_string(),
+        username: "neo4j".to_string(),
+        database: None,
+        auth_env_var: "RELATING_TEST_CLI_SHADOW_PASSWORD".to_string(),
+        created_at: chrono::Utc::now(),
+    };
+    relating_metadata::insert_aura_connection(&pool, &conn)
+        .await
+        .unwrap();
+
+    let queries = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        queries.path(),
+        r#"[{"name": "all", "cypher": "MATCH (n) RETURN n"}]"#,
+    )
+    .unwrap();
+    let (code, stdout) = run_cli(
+        &fixture,
+        &[
+            "shadow",
+            "run",
+            "--project",
+            &fixture.project_id,
+            "--connection",
+            &conn.id.to_string(),
+            "--queries",
+            queries.path().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 1, "stdout: {}", stdout);
+    assert!(stdout.contains("Confidence:"), "stdout: {}", stdout);
+}
+
+#[tokio::test]
+async fn test_debug_trace_without_evidence() {
+    let fixture = setup_clean_project().await;
+    let (code, stdout) = run_cli(
+        &fixture,
+        &[
+            "debug",
+            "trace",
+            "--project",
+            &fixture.project_id,
+            "--question",
+            "Who?",
+            "--no-ai",
+        ],
+    );
+    assert_eq!(code, 0, "stdout: {}", stdout);
+    assert!(stdout.contains("DBG-E001"), "stdout: {}", stdout);
+    assert!(stdout.contains("Likely causes:"), "stdout: {}", stdout);
+}
+
+#[tokio::test]
 async fn test_usage_errors_exit_2() {
     let fixture = setup_clean_project().await;
     let (code, _) = run_cli(&fixture, &["validate"]);

@@ -143,6 +143,21 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
             0x3F => {
                 // PULL: answer the pending RUN.
                 let (query, params) = pending_run.take().unwrap_or_default();
+                if query.contains("__fail__") {
+                    let mut meta = BTreeMap::new();
+                    meta.insert(
+                        "code".to_string(),
+                        BoltValue::String("Neo.ClientError.Statement.SyntaxError".to_string()),
+                    );
+                    meta.insert(
+                        "message".to_string(),
+                        BoltValue::String("injected failure for tests".to_string()),
+                    );
+                    if !send_message(&mut stream, 0x7F, &[BoltValue::Map(meta)]).await {
+                        break;
+                    }
+                    continue;
+                }
                 if query.contains("CREATE CONSTRAINT") || query.contains("CREATE INDEX") {
                     if !send_success(&mut stream, vec![]).await {
                         break;
@@ -236,6 +251,12 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
             }
             0x11..=0x13 => {
                 // BEGIN / COMMIT / ROLLBACK
+                if !send_success(&mut stream, vec![]).await {
+                    break;
+                }
+            }
+            0x0F => {
+                // RESET after a failure.
                 if !send_success(&mut stream, vec![]).await {
                     break;
                 }

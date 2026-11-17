@@ -1,0 +1,17 @@
+[package]
+name = "relating-debug"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+relating-core = { workspace = true }
+relating-metadata = { workspace = true }
+relating-graph = { workspace = true }
+relating-ai = { workspace = true }
+relating-retrieval = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

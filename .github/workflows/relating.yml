@@ -43,3 +43,9 @@ jobs:
       - name: Run retrieval evaluation gate
         if: hashFiles('eval/questions.txt') != ''
         run: ./target/release/relating eval run --project "${{ vars.RELATING_PROJECT_ID }}" --questions eval/questions.txt --min-grounded 0.5
+
+      - name: Run shadow comparison gate
+        if: ${{ hashFiles('shadow/queries.json') != '' && env.AURA_PASSWORD != '' }}
+        env:
+          AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
+        run: ./target/release/relating shadow run --project "${{ vars.RELATING_PROJECT_ID }}" --connection "${{ vars.AURA_CONNECTION_ID }}" --queries shadow/queries.json

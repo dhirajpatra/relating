@@ -12,6 +12,8 @@ members = [
     "crates/relating-schema",
     "crates/relating-portability",
     "crates/relating-cli",
+    "crates/relating-shadow",
+    "crates/relating-debug",
     "crates/relating-server",
 ]
 
@@ -57,3 +59,5 @@ relating-mcp = { path = "crates/relating-mcp" }
 relating-schema = { path = "crates/relating-schema" }
 relating-portability = { path = "crates/relating-portability" }
 relating-cli = { path = "crates/relating-cli" }
+relating-shadow = { path = "crates/relating-shadow" }
+relating-debug = { path = "crates/relating-debug" }

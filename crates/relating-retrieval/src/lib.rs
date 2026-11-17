@@ -9,7 +9,7 @@ pub use chunker::{chunk_record, chunk_text, hash_content, ChunkCandidate, ChunkC
 pub use error::RetrievalError;
 pub use evaluation::{aggregate_metrics, citation_precision, EVAL_METRICS_VERSION};
 pub use prompt::{
-    build_evidence_block, build_qa_request, extract_citation_markers,
+    build_citations, build_evidence_block, build_qa_request, excerpt, extract_citation_markers,
     INSUFFICIENT_EVIDENCE_MESSAGE, RAG_PROMPT_VERSION,
 };
 pub use service::{run_retrieval, DEFAULT_PROFILE_NAME, DEFAULT_TOP_K, MAX_TOP_K};

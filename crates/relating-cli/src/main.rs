@@ -23,6 +23,8 @@ fn usage() -> ! {
     eprintln!("  schema export --project ID --out DIR");
     eprintln!("  schema diff --project ID --file schema.json");
     eprintln!("  eval run --project ID --questions FILE [--strategy S] [--min-grounded F]");
+    eprintln!("  shadow run --project ID --connection CID --queries FILE");
+    eprintln!("  debug trace --project ID --question TEXT [--strategy S] [--no-ai]");
     eprintln!();
     eprintln!("Exit codes: 0 pass, 1 gate/test failure, 2 usage or config error.");
     std::process::exit(2);
@@ -88,7 +90,7 @@ fn parse_flags(rest: &[String]) -> Result<(Vec<String>, HashMap<String, String>)
     let mut iter = rest.iter().peekable();
     while let Some(arg) = iter.next() {
         if let Some(name) = arg.strip_prefix("--") {
-            if name == "all" {
+            if name == "all" || name == "no-ai" {
                 flags.insert(name.to_string(), "true".to_string());
                 continue;
             }
@@ -436,6 +438,170 @@ async fn cmd_eval_run(opts: &GlobalOpts, flags: &HashMap<String, String>) -> Res
     })
 }
 
+async fn cmd_shadow_run(
+    opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let project_id = parse_project_id(&require_flag(flags, "project")?)?;
+    let conn_id_str = require_flag(flags, "connection")?;
+    let path = require_flag(flags, "queries")?;
+    let ctx = open_context(opts, &project_id).await?;
+
+    let conn_id = AuraConnectionId::parse(&conn_id_str)
+        .map_err(|e| CliError::Usage(format!("Invalid connection ID: {}", e)))?;
+    let conn = get_aura_connection(&ctx.pool, &conn_id)
+        .await?
+        .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
+    let password = std::env::var(&conn.auth_env_var).map_err(|_| {
+        CliError::Usage(format!(
+            "Password environment variable '{}' is not set",
+            conn.auth_env_var
+        ))
+    })?;
+    let uri = relating_migrate::BoltUri::parse(&conn.uri).map_err(CliError::Migrate)?;
+    let mut config = relating_migrate::BoltConfig::new(uri, conn.username.clone(), password);
+    config.database = conn.database.clone();
+    let backend = relating_migrate::BoltBackend::new(config);
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::Usage(format!("Cannot read queries file: {}", e)))?;
+    let queries: Vec<relating_shadow::ShadowQuery> = serde_json::from_str(&content)
+        .map_err(|e| CliError::Usage(format!("Queries file is not valid JSON: {}", e)))?;
+
+    let (comparisons, summary) = relating_shadow::replay_suite(
+        ctx.graph.as_ref(),
+        &ctx.graph_path,
+        &backend,
+        &queries,
+        &relating_shadow::SuiteOptions::default(),
+    )
+    .await?;
+
+    match opts.format {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "summary": summary,
+                "comparisons": comparisons,
+            }))
+            .unwrap_or_default()
+        ),
+        OutputFormat::Text => {
+            for comparison in &comparisons {
+                println!(
+                    "[{:?}] {}: {} (source {} rows, target {} rows, {:.1}x latency)",
+                    comparison.verdict,
+                    comparison.name,
+                    comparison.detail,
+                    comparison.source_rows,
+                    comparison.target_rows,
+                    comparison.latency_ratio
+                );
+            }
+            println!(
+                "Confidence: {:?} ({}/{})",
+                summary.confidence, summary.matched, summary.total
+            );
+            for reason in &summary.confidence_reasons {
+                println!("  - {}", reason);
+            }
+        }
+    }
+    Ok(if summary.confidence == relating_shadow::Confidence::Low {
+        1
+    } else {
+        0
+    })
+}
+
+async fn cmd_debug_trace(
+    opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let project_id = parse_project_id(&require_flag(flags, "project")?)?;
+    let question = require_flag(flags, "question")?;
+    let ctx = open_context(opts, &project_id).await?;
+
+    let strategy = match flags.get("strategy").map(|s| s.as_str()) {
+        None | Some("hybrid") => RetrievalStrategy::Hybrid,
+        Some("vector") => RetrievalStrategy::Vector,
+        Some("keyword") => RetrievalStrategy::Keyword,
+        Some(other) => return Err(CliError::Usage(format!("Unknown strategy '{}'", other))),
+    };
+
+    let provider = relating_ai::create_ai_provider(&ctx.project.ai_config)?;
+    let trace = relating_debug::build_trace(
+        &ctx.pool,
+        ctx.graph.as_ref(),
+        &ctx.graph_path,
+        &ctx.project,
+        &provider,
+        &question,
+        strategy,
+        5,
+    )
+    .await?;
+    let mut rules = relating_debug::diagnose_rules(&trace);
+    let ai_hypothesis = if flags.contains_key("no-ai") || trace.passages.is_empty() {
+        None
+    } else {
+        match relating_debug::diagnose_ai(
+            &provider,
+            &trace,
+            &rules,
+            &ctx.project.ai_config.chat_model,
+        )
+        .await
+        {
+            Some(hypothesis) => Some(hypothesis),
+            None => {
+                rules.push(relating_debug::DiagnosisRule {
+                    code: "DBG-I003".to_string(),
+                    severity: relating_debug::Severity::Info,
+                    message: "AI hypothesis unavailable: provider call failed".to_string(),
+                });
+                None
+            }
+        }
+    };
+    let likely_causes = relating_debug::likely_causes(&rules);
+
+    match opts.format {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "trace": trace,
+                "diagnosis": {"rules": rules, "likely_causes": likely_causes, "ai_hypothesis": ai_hypothesis},
+            }))
+            .unwrap_or_default()
+        ),
+        OutputFormat::Text => {
+            println!("Question: {}", trace.question);
+            println!(
+                "Retrieval: {} passage(s) via {:?} on {} ({} {}d)",
+                trace.passages.len(),
+                trace.strategy,
+                trace.profile_name,
+                trace.embedding_model,
+                trace.dimensions
+            );
+            println!("Grounded: {} | citations: {} | evidence: {} chars", trace.grounded, trace.citations.len(), trace.evidence_chars);
+            println!("Answer: {}", trace.answer.chars().take(300).collect::<String>());
+            println!("Likely causes:");
+            for cause in &likely_causes {
+                println!("  - {}", cause);
+            }
+            for rule in &rules {
+                println!("[{:?}] {}: {}", rule.severity, rule.code, rule.message);
+            }
+            if let Some(hypothesis) = &ai_hypothesis {
+                println!("AI hypothesis [{}]: {}", hypothesis.model, hypothesis.text);
+            }
+        }
+    }
+    Ok(0)
+}
+
 #[tokio::main]
 async fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -457,6 +623,8 @@ async fn main() {
             ["schema", "export"] => cmd_schema_export(&opts, &flags).await,
             ["schema", "diff"] => cmd_schema_diff(&opts, &flags).await,
             ["eval", "run"] => cmd_eval_run(&opts, &flags).await,
+            ["shadow", "run"] => cmd_shadow_run(&opts, &flags).await,
+            ["debug", "trace"] => cmd_debug_trace(&opts, &flags).await,
             _ => Err(CliError::Usage(format!(
                 "Unknown command: {}",
                 positionals.join(" ")

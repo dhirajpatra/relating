@@ -22,6 +22,7 @@ import {
   OntologyStatusResponse,
   PlanResponse,
   Project,
+  DebugTraceResponse,
   PortableReport,
   ProjectDetail,
   ProjectSummary,
@@ -31,6 +32,8 @@ import {
   RetrievalStrategy,
   RetrievalTrace,
   SchemaRevision,
+  ShadowQuerySpec,
+  ShadowRunResponse,
   Source,
   SystemHealth,
   VerificationReport,
@@ -323,5 +326,27 @@ export const api = {
     request<RunTestsResponse>(`/projects/${projectId}/portability/run-tests`, {
       method: 'POST',
       body: JSON.stringify({ connection_id: connectionId, tests }),
+    }),
+
+  // R5 API endpoints
+  runShadow: (
+    projectId: string,
+    connectionId: string,
+    queries: ShadowQuerySpec[],
+    redactParams?: boolean
+  ) =>
+    request<ShadowRunResponse>(`/projects/${projectId}/shadow/runs`, {
+      method: 'POST',
+      body: JSON.stringify({
+        connection_id: connectionId,
+        queries,
+        redact_params: redactParams,
+      }),
+    }),
+
+  debugTrace: (projectId: string, question: string, strategy?: RetrievalStrategy) =>
+    request<DebugTraceResponse>(`/projects/${projectId}/debug/trace`, {
+      method: 'POST',
+      body: JSON.stringify({ question, strategy }),
     }),
 };

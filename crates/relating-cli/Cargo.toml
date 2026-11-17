@@ -17,6 +17,8 @@ relating-ai = { workspace = true }
 relating-retrieval = { workspace = true }
 relating-migrate = { workspace = true }
 relating-schema = { workspace = true }
+relating-shadow = { workspace = true }
+relating-debug = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
