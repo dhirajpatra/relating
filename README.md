@@ -13,6 +13,22 @@ Relating is a local-first, AI-native graph development and GraphRAG workbench. I
 
 ---
 
+## Quick start
+
+Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ with npm. Optional: Ollama (`ollama serve`) for local AI models — without it the app runs on the built-in offline mock provider.
+
+```bash
+./start.sh
+```
+
+Then open http://127.0.0.1:8080 in your browser to use the workbench.
+
+The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `docker compose up --build`.
+
+Current status: Milestones A–C work end to end (projects, CSV/JSON/text ingestion, AI ontology proposal and approval, entity extraction, graph explorer, Cypher console, embeddings, vector/keyword/hybrid retrieval, grounded Q&A with citations, evaluation). Next: MCP agent connection (D) and Aura migration (E). Slice 3 endpoints are documented in [docs/api/retrieval.md](docs/api/retrieval.md).
+
+---
+
 ## 1. Product definition
 
 Relating is a domain-agnostic application for individual developers and enterprise teams. A project can contain any permitted business or technical domain: software repositories, product catalogues, supply chains, research papers, enterprise knowledge, financial data, or a user's own datasets.
