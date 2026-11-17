@@ -6,7 +6,10 @@ use axum::Json;
 use chrono::Utc;
 use relating_core::{ProjectId, RegisterSourceRequest, Source, SourceId, SourceStatus};
 use relating_ingest::{compute_sha256, parse_source_content};
-use relating_metadata::{delete_source as db_delete_source, get_project as db_get_project, get_source as db_get_source, insert_source, list_sources as db_list_sources};
+use relating_metadata::{
+    delete_chunks_for_source, delete_source as db_delete_source, get_project as db_get_project,
+    get_source as db_get_source, insert_source, list_sources as db_list_sources,
+};
 
 pub async fn register_source_handler(
     State(state): State<AppState>,
@@ -90,8 +93,9 @@ pub async fn delete_source_handler(
 ) -> Result<StatusCode, AppError> {
     let _project_id = ProjectId::parse(&id_str)
         .map_err(|e| AppError::BadRequest(format!("Invalid Project UUID '{}': {}", id_str, e)))?;
-    let source_id = SourceId::parse(&source_id_str)
-        .map_err(|e| AppError::BadRequest(format!("Invalid Source UUID '{}': {}", source_id_str, e)))?;
+    let source_id = SourceId::parse(&source_id_str).map_err(|e| {
+        AppError::BadRequest(format!("Invalid Source UUID '{}': {}", source_id_str, e))
+    })?;
 
     // Try finding stored path from source metadata before deleting
     if let Ok(Some(source)) = db_get_source(&state.pool, &source_id).await {
@@ -105,8 +109,14 @@ pub async fn delete_source_handler(
 
     let deleted = db_delete_source(&state.pool, &source_id).await?;
     if !deleted {
-        return Err(AppError::NotFound(format!("Source '{}' not found", source_id)));
+        return Err(AppError::NotFound(format!(
+            "Source '{}' not found",
+            source_id
+        )));
     }
+
+    // Remove embedding chunks so deleted sources stop appearing in retrieval
+    let _ = delete_chunks_for_source(&state.pool, &source_id).await;
 
     Ok(StatusCode::NO_CONTENT)
 }

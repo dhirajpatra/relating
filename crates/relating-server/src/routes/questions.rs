@@ -1,0 +1,126 @@
+use crate::error::AppError;
+use crate::routes::retrieval::{run_retrieval, DEFAULT_TOP_K};
+use crate::state::AppState;
+use axum::extract::{Path, State};
+use axum::Json;
+use relating_ai::create_ai_provider;
+use relating_core::{
+    AnswerCitation, EmbeddingProfileId, ProjectId, QuestionAnswer, RetrievalStrategy,
+    RetrievalTrace,
+};
+use relating_metadata::get_project as db_get_project;
+use relating_retrieval::{
+    build_qa_request, extract_citation_markers, RetrievalError, INSUFFICIENT_EVIDENCE_MESSAGE,
+    RAG_PROMPT_VERSION,
+};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct QuestionRequest {
+    pub question: String,
+    #[serde(default)]
+    pub strategy: Option<RetrievalStrategy>,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub profile_name: Option<String>,
+}
+
+fn excerpt(content: &str, max_chars: usize) -> String {
+    let trimmed = content.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max_chars).collect();
+    format!("{}...", head)
+}
+
+pub async fn ask_question_handler(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    Json(payload): Json<QuestionRequest>,
+) -> Result<Json<QuestionAnswer>, AppError> {
+    let project_id = ProjectId::parse(&id_str)
+        .map_err(|e| AppError::BadRequest(format!("Invalid UUID '{}': {}", id_str, e)))?;
+
+    let project = db_get_project(&state.pool, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Project with ID '{}' not found", project_id)))?;
+
+    let question = payload.question.trim().to_string();
+    if question.is_empty() {
+        return Err(AppError::BadRequest("Question cannot be empty".to_string()));
+    }
+
+    let strategy = payload.strategy.unwrap_or_default();
+    let top_k = payload.top_k.unwrap_or(DEFAULT_TOP_K);
+    let provider = create_ai_provider(&project.ai_config)?;
+    let start_time = std::time::Instant::now();
+
+    let trace = match run_retrieval(
+        &state,
+        &project,
+        &provider,
+        &question,
+        strategy.clone(),
+        top_k,
+        payload.profile_name.as_deref(),
+    )
+    .await
+    {
+        Ok(trace) => trace,
+        Err(AppError::Retrieval(RetrievalError::NoEvidence(_))) => {
+            // Honest ungrounded answer: no evidence was retrieved, so the
+            // model is never called and nothing is fabricated.
+            return Ok(Json(QuestionAnswer {
+                question,
+                answer: INSUFFICIENT_EVIDENCE_MESSAGE.to_string(),
+                grounded: false,
+                citations: Vec::new(),
+                trace: RetrievalTrace {
+                    query: payload.question.trim().to_string(),
+                    strategy,
+                    profile_id: EmbeddingProfileId(uuid::Uuid::nil()),
+                    profile_name: "none".to_string(),
+                    embedding_model: project.ai_config.embedding_model.clone(),
+                    dimensions: 0,
+                    top_k,
+                    passages: Vec::new(),
+                    latency_ms: start_time.elapsed().as_secs_f64() * 1000.0,
+                },
+                chat_model: project.ai_config.chat_model.clone(),
+                prompt_version: RAG_PROMPT_VERSION.to_string(),
+                latency_ms: start_time.elapsed().as_secs_f64() * 1000.0,
+            }));
+        }
+        Err(other) => return Err(other),
+    };
+
+    let chat_req = build_qa_request(&question, &trace.passages);
+    let chat_resp = provider.chat_completion(&chat_req).await?;
+
+    let markers = extract_citation_markers(&chat_resp.content);
+    let mut citations = Vec::new();
+    for marker in markers {
+        if let Some(passage) = trace.passages.get((marker - 1) as usize) {
+            citations.push(AnswerCitation {
+                index: marker,
+                chunk_id: passage.chunk_id.clone(),
+                source_id: passage.source_id.clone(),
+                filename: passage.filename.clone(),
+                excerpt: excerpt(&passage.content, 200),
+            });
+        }
+    }
+
+    Ok(Json(QuestionAnswer {
+        question,
+        answer: chat_resp.content,
+        grounded: !trace.passages.is_empty(),
+        citations,
+        trace,
+        chat_model: project.ai_config.chat_model.clone(),
+        prompt_version: RAG_PROMPT_VERSION.to_string(),
+        latency_ms: start_time.elapsed().as_secs_f64() * 1000.0,
+    }))
+}

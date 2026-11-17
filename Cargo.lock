@@ -2250,6 +2250,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "relating-retrieval"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "relating-ai",
+ "relating-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "relating-server"
 version = "0.1.0"
 dependencies = [
@@ -2261,6 +2275,7 @@ dependencies = [
  "relating-graph",
  "relating-ingest",
  "relating-metadata",
+ "relating-retrieval",
  "serde",
  "serde_json",
  "tempfile",

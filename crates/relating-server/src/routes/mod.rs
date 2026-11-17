@@ -1,10 +1,14 @@
 pub mod ai;
 pub mod cypher;
+pub mod embeddings;
+pub mod evaluations;
 pub mod graph;
 pub mod health;
 pub mod ingest;
 pub mod ontology;
 pub mod projects;
+pub mod questions;
+pub mod retrieval;
 pub mod sources;
 
 use crate::state::AppState;
@@ -52,7 +56,10 @@ pub fn create_router(state: AppState) -> Router {
             "/projects/:id/ontology/propose",
             post(ontology::propose_ontology_handler),
         )
-        .route("/projects/:id/ontology", get(ontology::get_ontology_handler))
+        .route(
+            "/projects/:id/ontology",
+            get(ontology::get_ontology_handler),
+        )
         .route(
             "/projects/:id/ontology/approve",
             post(ontology::approve_ontology_handler),
@@ -63,14 +70,37 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/projects/:id/graph/elements",
             get(graph::get_graph_elements_handler),
+        )
+        // Slice 3: embeddings, retrieval, grounded Q&A, evaluation
+        .route(
+            "/projects/:id/embeddings",
+            get(embeddings::get_embeddings_status_handler)
+                .post(embeddings::generate_embeddings_handler),
+        )
+        .route(
+            "/projects/:id/retrieval",
+            post(retrieval::run_retrieval_handler),
+        )
+        .route(
+            "/projects/:id/questions",
+            post(questions::ask_question_handler),
+        )
+        .route(
+            "/projects/:id/evaluations",
+            get(evaluations::list_evaluations_handler).post(evaluations::create_evaluation_handler),
+        )
+        .route(
+            "/projects/:id/evaluations/:eval_id",
+            get(evaluations::get_evaluation_handler),
         );
 
     let router = Router::new().nest("/api/v1", api_routes);
 
     let static_dir = std::path::Path::new("web/dist");
     let router = if static_dir.exists() {
-        let serve_dir = tower_http::services::ServeDir::new(static_dir)
-            .not_found_service(tower_http::services::ServeFile::new(static_dir.join("index.html")));
+        let serve_dir = tower_http::services::ServeDir::new(static_dir).not_found_service(
+            tower_http::services::ServeFile::new(static_dir.join("index.html")),
+        );
         router.fallback_service(serve_dir)
     } else {
         router

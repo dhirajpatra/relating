@@ -336,3 +336,207 @@ pub struct ExtractedRelationship {
     pub confidence: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EmbeddingProfileId(pub Uuid);
+
+impl EmbeddingProfileId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for EmbeddingProfileId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for EmbeddingProfileId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingProfile {
+    pub id: EmbeddingProfileId,
+    pub project_id: ProjectId,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub model_version: Option<String>,
+    pub dimensions: usize,
+    #[serde(default = "default_modality")]
+    pub modality: String,
+    pub created_at: DateTime<Utc>,
+}
+
+fn default_modality() -> String {
+    "prose".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ChunkId(pub Uuid);
+
+impl ChunkId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for ChunkId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for ChunkId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chunk {
+    pub id: ChunkId,
+    pub project_id: ProjectId,
+    pub profile_id: EmbeddingProfileId,
+    pub source_id: SourceId,
+    pub ordinal: u32,
+    pub content: String,
+    pub content_hash: String,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedding: Vec<f32>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrievalStrategy {
+    Vector,
+    Keyword,
+    Hybrid,
+}
+
+impl Default for RetrievalStrategy {
+    fn default() -> Self {
+        Self::Hybrid
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievedPassage {
+    pub chunk_id: ChunkId,
+    pub source_id: SourceId,
+    pub filename: String,
+    pub score: f32,
+    pub rank: u32,
+    pub content: String,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalTrace {
+    pub query: String,
+    pub strategy: RetrievalStrategy,
+    pub profile_id: EmbeddingProfileId,
+    pub profile_name: String,
+    pub embedding_model: String,
+    pub dimensions: usize,
+    pub top_k: usize,
+    pub passages: Vec<RetrievedPassage>,
+    pub latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnswerCitation {
+    pub index: u32,
+    pub chunk_id: ChunkId,
+    pub source_id: SourceId,
+    pub filename: String,
+    pub excerpt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionAnswer {
+    pub question: String,
+    pub answer: String,
+    pub grounded: bool,
+    pub citations: Vec<AnswerCitation>,
+    pub trace: RetrievalTrace,
+    pub chat_model: String,
+    pub prompt_version: String,
+    pub latency_ms: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EvaluationId(pub Uuid);
+
+impl EvaluationId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+impl Default for EvaluationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for EvaluationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionEvaluation {
+    pub question: String,
+    pub answer: String,
+    pub grounded: bool,
+    pub citation_count: usize,
+    pub citation_precision: f32,
+    pub retrieval_latency_ms: f64,
+    pub answer_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationMetrics {
+    pub question_count: usize,
+    pub grounded_count: usize,
+    pub grounded_rate: f32,
+    pub mean_citation_precision: f32,
+    pub mean_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationRun {
+    pub id: EvaluationId,
+    pub project_id: ProjectId,
+    pub strategy: RetrievalStrategy,
+    pub chat_model: String,
+    pub embedding_model: String,
+    pub prompt_version: String,
+    pub metrics: EvaluationMetrics,
+    pub questions: Vec<QuestionEvaluation>,
+    pub created_at: DateTime<Utc>,
+}

@@ -6,6 +6,7 @@ members = [
     "crates/relating-graph",
     "crates/relating-ai",
     "crates/relating-ingest",
+    "crates/relating-retrieval",
     "crates/relating-server",
 ]
 
@@ -41,3 +42,4 @@ relating-metadata = { path = "crates/relating-metadata" }
 relating-graph = { path = "crates/relating-graph" }
 relating-ai = { path = "crates/relating-ai" }
 relating-ingest = { path = "crates/relating-ingest" }
+relating-retrieval = { path = "crates/relating-retrieval" }

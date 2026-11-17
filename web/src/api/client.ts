@@ -2,6 +2,9 @@ import {
   AiHealthReport,
   CreateProjectRequest,
   CytoscapeGraph,
+  EmbeddingStatusResponse,
+  EvaluationRun,
+  GenerateEmbeddingsResponse,
   GraphQueryResult,
   IngestionResultResponse,
   Ontology,
@@ -9,6 +12,9 @@ import {
   Project,
   ProjectDetail,
   ProjectSummary,
+  QuestionAnswer,
+  RetrievalStrategy,
+  RetrievalTrace,
   Source,
   SystemHealth,
 } from '../types';
@@ -127,4 +133,40 @@ export const api = {
     request<CytoscapeGraph>(
       `/projects/${projectId}/graph/elements${limit ? `?limit=${limit}` : ''}`
     ),
+
+  // Slice 3 API endpoints
+  getEmbeddingsStatus: (projectId: string) =>
+    request<EmbeddingStatusResponse>(`/projects/${projectId}/embeddings`),
+
+  generateEmbeddings: (projectId: string) =>
+    request<GenerateEmbeddingsResponse>(`/projects/${projectId}/embeddings`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  runRetrieval: (
+    projectId: string,
+    query: string,
+    strategy?: RetrievalStrategy,
+    topK?: number
+  ) =>
+    request<RetrievalTrace>(`/projects/${projectId}/retrieval`, {
+      method: 'POST',
+      body: JSON.stringify({ query, strategy, top_k: topK }),
+    }),
+
+  askQuestion: (projectId: string, question: string, strategy?: RetrievalStrategy) =>
+    request<QuestionAnswer>(`/projects/${projectId}/questions`, {
+      method: 'POST',
+      body: JSON.stringify({ question, strategy }),
+    }),
+
+  createEvaluation: (projectId: string, questions: string[], strategy?: RetrievalStrategy) =>
+    request<EvaluationRun>(`/projects/${projectId}/evaluations`, {
+      method: 'POST',
+      body: JSON.stringify({ questions, strategy }),
+    }),
+
+  listEvaluations: (projectId: string) =>
+    request<EvaluationRun[]>(`/projects/${projectId}/evaluations`),
 };

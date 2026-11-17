@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { GraphExplorer } from './GraphExplorer';
 import { OntologyReview } from './OntologyReview';
+import { RetrievalWorkbench } from './RetrievalWorkbench';
 import { SourceManager } from './SourceManager';
 
 interface ProjectWorkspaceProps {
@@ -22,7 +23,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   const [ontologyStatus, setOntologyStatus] = useState<OntologyStatusResponse>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai'>('sources');
+  const [activeTab, setActiveTab] = useState<'sources' | 'ontology' | 'explorer' | 'cypher' | 'ai' | 'retrieval'>('sources');
 
   // Cypher workbench state
   const [query, setQuery] = useState('MATCH (n) RETURN n LIMIT 25');
@@ -268,6 +269,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
           { id: 'explorer', label: '3. Graph Explorer' },
           { id: 'cypher', label: '4. Cypher Console' },
           { id: 'ai', label: '5. AI Service' },
+          { id: 'retrieval', label: '6. Retrieval & Q&A' },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -509,6 +511,10 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
             </div>
           )}
         </div>
+      )}
+
+      {activeTab === 'retrieval' && (
+        <RetrievalWorkbench projectId={projectId} hasSources={sources.length > 0} />
       )}
 
       {activeTab === 'ai' && (

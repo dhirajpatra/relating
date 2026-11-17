@@ -329,13 +329,13 @@ export const GraphExplorer: React.FC<GraphExplorerProps> = ({
                 PROVENANCE LINEAGE
               </span>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                {selectedNode.properties._source_file && (
+                {Boolean(selectedNode.properties._source_file) && (
                   <div>
                     <strong style={{ color: 'var(--text-muted)' }}>Source: </strong>
                     {String(selectedNode.properties._source_file)}
                   </div>
                 )}
-                {selectedNode.properties._lineage_ref && (
+                {Boolean(selectedNode.properties._lineage_ref) && (
                   <div>
                     <strong style={{ color: 'var(--text-muted)' }}>Ref: </strong>
                     <span style={{ fontFamily: 'monospace' }}>{String(selectedNode.properties._lineage_ref)}</span>

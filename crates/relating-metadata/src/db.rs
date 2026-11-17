@@ -26,7 +26,9 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, RelatingError> {
     }
 
     let connection_options = SqliteConnectOptions::from_str(database_url)
-        .map_err(|e| RelatingError::Database(format!("Invalid SQLite URL '{}': {}", database_url, e)))?
+        .map_err(|e| {
+            RelatingError::Database(format!("Invalid SQLite URL '{}': {}", database_url, e))
+        })?
         .create_if_missing(true);
 
     let pool = SqlitePoolOptions::new()
@@ -42,7 +44,9 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, RelatingError> {
 }
 
 pub const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial_schema.sql");
-pub const SOURCES_AND_ONTOLOGIES_SCHEMA: &str = include_str!("../migrations/0002_sources_and_ontologies.sql");
+pub const SOURCES_AND_ONTOLOGIES_SCHEMA: &str =
+    include_str!("../migrations/0002_sources_and_ontologies.sql");
+pub const RETRIEVAL_SCHEMA: &str = include_str!("../migrations/0003_retrieval.sql");
 
 pub async fn run_migrations(pool: &DbPool) -> Result<(), RelatingError> {
     sqlx::raw_sql(INITIAL_SCHEMA)
@@ -55,6 +59,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), RelatingError> {
         .await
         .map_err(|e| RelatingError::Database(format!("Migration 0002 failed: {}", e)))?;
 
+    sqlx::raw_sql(RETRIEVAL_SCHEMA)
+        .execute(pool)
+        .await
+        .map_err(|e| RelatingError::Database(format!("Migration 0003 failed: {}", e)))?;
+
     Ok(())
 }
 
@@ -63,7 +72,9 @@ pub async fn init_in_memory_db() -> Result<DbPool, RelatingError> {
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
-        .map_err(|e| RelatingError::Database(format!("Failed to connect to in-memory SQLite: {}", e)))?;
+        .map_err(|e| {
+            RelatingError::Database(format!("Failed to connect to in-memory SQLite: {}", e))
+        })?;
 
     run_migrations(&pool).await?;
     Ok(pool)

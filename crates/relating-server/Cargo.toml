@@ -15,6 +15,7 @@ relating-metadata = { workspace = true }
 relating-graph = { workspace = true }
 relating-ai = { workspace = true }
 relating-ingest = { workspace = true }
+relating-retrieval = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { version = "0.5", features = ["util"] }

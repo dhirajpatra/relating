@@ -167,3 +167,107 @@ export interface CytoscapeGraph {
     edges: CytoscapeEdge[];
   };
 }
+
+// Slice 3: Embeddings, Retrieval, Q&A, Evaluation
+export type RetrievalStrategy = 'vector' | 'keyword' | 'hybrid';
+
+export interface EmbeddingProfile {
+  id: string;
+  project_id: string;
+  name: string;
+  provider: string;
+  model: string;
+  model_version?: string;
+  dimensions: number;
+  modality: string;
+  created_at: string;
+}
+
+export interface EmbeddingProfileStatus {
+  profile: EmbeddingProfile;
+  chunk_count: number;
+}
+
+export interface EmbeddingStatusResponse {
+  profiles: EmbeddingProfileStatus[];
+}
+
+export interface GenerateEmbeddingsResponse {
+  profile: EmbeddingProfile;
+  sources_processed: number;
+  chunks_created: number;
+  chunks_skipped: number;
+  dimensions: number;
+  elapsed_ms: number;
+}
+
+export interface RetrievedPassage {
+  chunk_id: string;
+  source_id: string;
+  filename: string;
+  score: number;
+  rank: number;
+  content: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface RetrievalTrace {
+  query: string;
+  strategy: RetrievalStrategy;
+  profile_id: string;
+  profile_name: string;
+  embedding_model: string;
+  dimensions: number;
+  top_k: number;
+  passages: RetrievedPassage[];
+  latency_ms: number;
+}
+
+export interface AnswerCitation {
+  index: number;
+  chunk_id: string;
+  source_id: string;
+  filename: string;
+  excerpt: string;
+}
+
+export interface QuestionAnswer {
+  question: string;
+  answer: string;
+  grounded: boolean;
+  citations: AnswerCitation[];
+  trace: RetrievalTrace;
+  chat_model: string;
+  prompt_version: string;
+  latency_ms: number;
+}
+
+export interface QuestionEvaluation {
+  question: string;
+  answer: string;
+  grounded: boolean;
+  citation_count: number;
+  citation_precision: number;
+  retrieval_latency_ms: number;
+  answer_latency_ms: number;
+}
+
+export interface EvaluationMetrics {
+  question_count: number;
+  grounded_count: number;
+  grounded_rate: number;
+  mean_citation_precision: number;
+  mean_latency_ms: number;
+}
+
+export interface EvaluationRun {
+  id: string;
+  project_id: string;
+  strategy: RetrievalStrategy;
+  chat_model: string;
+  embedding_model: string;
+  prompt_version: string;
+  metrics: EvaluationMetrics;
+  questions: QuestionEvaluation[];
+  created_at: string;
+}

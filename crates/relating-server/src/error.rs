@@ -26,6 +26,9 @@ pub enum AppError {
     #[error("Ingest error: {0}")]
     Ingest(#[from] relating_ingest::IngestError),
 
+    #[error("Retrieval error: {0}")]
+    Retrieval(#[from] relating_retrieval::RetrievalError),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -47,9 +50,11 @@ impl IntoResponse for AppError {
             AppError::Graph(GraphError::Syntax(msg)) => {
                 (StatusCode::BAD_REQUEST, "CYPHER_SYNTAX_ERROR", msg.clone())
             }
-            AppError::Graph(GraphError::Semantic(msg)) => {
-                (StatusCode::BAD_REQUEST, "CYPHER_SEMANTIC_ERROR", msg.clone())
-            }
+            AppError::Graph(GraphError::Semantic(msg)) => (
+                StatusCode::BAD_REQUEST,
+                "CYPHER_SEMANTIC_ERROR",
+                msg.clone(),
+            ),
             AppError::Graph(GraphError::ReadOnlyViolation(msg)) => {
                 (StatusCode::FORBIDDEN, "READ_ONLY_VIOLATION", msg.clone())
             }
@@ -58,11 +63,10 @@ impl IntoResponse for AppError {
                 "AI_PROVIDER_ERROR",
                 err.to_string(),
             ),
-            AppError::Ingest(err) => (
-                StatusCode::BAD_REQUEST,
-                "INGEST_ERROR",
-                err.to_string(),
-            ),
+            AppError::Ingest(err) => (StatusCode::BAD_REQUEST, "INGEST_ERROR", err.to_string()),
+            AppError::Retrieval(err) => {
+                (StatusCode::BAD_REQUEST, "RETRIEVAL_ERROR", err.to_string())
+            }
             other => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",
