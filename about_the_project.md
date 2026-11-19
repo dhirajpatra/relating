@@ -4,99 +4,74 @@ Modern AI applications need more than vector search and flat document retrieval.
 
 We were inspired by the potential of [Relate](https://relatedb.ai/) as a lightweight, developer-friendly graph database and the enterprise capabilities of Neo4j Aura. We wanted to bring these worlds together with AI, GraphRAG, and ontology engineering into one unified platform.
 
-Our vision was to make graph-powered AI development accessible to every developer — from local experimentation to enterprise deployment — without requiring developers to build the entire infrastructure themselves.
+Our vision was to make graph-powered AI development accessible to every developer — from local experimentation to enterprise deployment — without requiring developers to rewrite queries or build the entire infrastructure themselves.
 
 This is how **Relating** was born: Relate + Intelligence.
 
 ## What it does
 
-Relating is an AI-native, developer-first platform for graph development, GraphRAG engineering, ontology management, and intelligent agent integration.
+Relating is an AI-native, developer-first platform for graph development, GraphRAG engineering, ontology management, Graph DevOps, and intelligent agent integration.
 
 Its core capabilities include:
 
 - **Graph Development Workbench:** Create, manage, query, and visualize isolated graph projects using Relate.
-- **AI-Powered Knowledge Engineering:** Transform documents, tables, structured datasets, and other sources into connected knowledge graphs through AI-assisted entity extraction, relationship discovery, and ontology generation.
-- **GraphRAG:** Combine vector search, full-text search, graph traversal, and AI reasoning to deliver context-aware answers with source traceability.
-- **Mandatory AI Service:** Integrate configurable local and hosted AI providers for reasoning, embeddings, extraction, reranking, and evaluation.
-- **Neo4j Aura Migration:** Analyse compatibility, generate migration plans, execute approved transfers, and validate graph data in Neo4j Aura.
-- **MCP Integration:** Allow developer tools and AI agents such as Claude Code, Codex, Cursor, and other compatible MCP clients to connect to Relating.
-- **Developer-Friendly Interfaces:** Provide APIs, CLI integration, and extensible architecture for developers and enterprise teams.
+- **AI-Powered Knowledge Engineering:** Ingest CSV, JSON, plain text, PDF, and DOCX files with full source lineage, transforming them into connected knowledge graphs through AI-assisted entity extraction, relationship discovery, and approval-gated ontology generation.
+- **Hybrid GraphRAG & Evaluation:** Combine vector search, full-text search, and Cypher graph traversal via Reciprocal Rank Fusion (RRF) to deliver grounded answers with traceable citations and evaluation metrics:
+  $$\text{RRF}(d) = \sum_{r \in R} \frac{1}{k + \text{rank}_r(d)}$$
+- **Mandatory AI Service:** Integrate configurable local (Ollama) and hosted (OpenAI-compatible) AI providers for reasoning, embeddings, extraction, reranking, and evaluation.
+- **Neo4j Aura Migration & Zero-Rewrite Backend Flip:** Run pre-flight compatibility and vector-index fit checks, preview dry-run plans, execute idempotent merge-upsert transfers over Bolt, verify counts and constraints, and flip applications between Relate and Neo4j Aura without rewriting a single query.
+- **Graph DevOps & Portability Engine:** Manage schema-as-code revisions and diffs, scan repositories with the Portability Compiler, run CI/CD validation gates via the `relating` CLI and GitHub Actions, replay shadow traffic across backends, generate synthetic fixtures, and get sizing/performance recommendations.
+- **MCP Integration:** Expose project-scoped read-only tools (and policy-gated write tools) over stdio and Streamable HTTP so developer tools and AI agents such as Claude Code, Codex, and Cursor can connect safely.
 
-Relating is designed to remain a complete graph development and GraphRAG platform even when users do not migrate to Neo4j Aura.
+Relating is designed to remain a complete graph development and GraphRAG platform even when users never migrate to Neo4j Aura.
 
 ## How we built it
 
-We chose a hybrid architecture combining Rust, React, TypeScript, and optional Python-based workers.
+We built a modular monolith combining Rust, React, TypeScript, and isolated Python document workers across 15 specialized crates and a 12-tab workbench:
 
-- **Rust + Axum + Tokio:** Backend services, graph orchestration, APIs, and application control plane.
-- **Relate:** Embedded graph database for local-first graph storage and querying.
-- **React + TypeScript:** Developer-focused web interface and graph workbench.
-- **AI Provider Abstraction:** A mandatory AI service supporting configurable LLMs, embedding models, extraction, and evaluation.
-- **Python:** Document processing and integration with the broader AI and machine learning ecosystem.
-- **Cytoscape.js:** Interactive graph visualization.
-- **SQLite / PostgreSQL:** Project metadata, configurations, users, and job management.
-- **MCP:** Standardized connectivity between Relating and external AI coding agents.
-- **Docker:** Reproducible local and self-hosted deployment.
-
-The architecture separates graph storage, AI services, ingestion pipelines, application metadata, and external integrations. This makes it extensible without introducing unnecessary microservices or tightly coupling the platform to a single AI provider.
+- **Rust + Axum + Tokio:** Backend control plane, REST API, policy enforcement, shadow replay, portability compiler, and Bolt migration engine (`relating-core`, `relating-server`, `relating-migrate`, `relating-portability`, `relating-shadow`, `relating-advisor`).
+- **Relate & `GraphBackend` Abstraction:** Embedded project-scoped Relate stores (`.rl` / directory stores) behind a unified `GraphBackend` interface (`RelateBackend` and `Neo4jBackend`) that enables seamless Relate $\leftrightarrow$ Aura cutover.
+- **React + TypeScript + Cytoscape.js:** A 12-tab developer workbench covering Sources, Ontology, Graph Explorer, Cypher Console, AI Service, Retrieval & Q&A, Agents, Aura Migration, Schema & Contracts, Portability, Shadow & Debug, and Test Data & Advisor.
+- **AI Provider Abstraction (`relating-ai`):** Required provider adapters for chat, embeddings, structured extraction, reranking, and LLM-as-a-judge evaluation, isolating embedding profiles by model ID, modality, and vector dimension $d$.
+- **Python Workers (`relating-ingest`):** Isolated parsing and chunking pipelines for PDF, DOCX, CSV, JSON, and unstructured text with row/chunk provenance.
+- **SQLite & PostgreSQL Metadata:** Local SQLite persistence alongside team PostgreSQL schema provisioning and validation, paired with runtime secret resolution via environment variables, mounted secret files, or the OS keychain.
+- **MCP & CLI (`relating-mcp`, `relating-cli`):** Standardized stdio/HTTP MCP server and headless CLI for CI/CD gates, contract tests, and debugging.
+- **Docker:** One-command local startup (`./start.sh`) and reproducible `docker compose` deployment.
 
 ## Challenges we ran into
 
-One of the biggest challenges was bringing together multiple technologies while keeping the developer experience simple.
+Building an end-to-end path from local embedded graph prototyping to cloud Aura production surfaced several deep engineering challenges:
 
-Some of the key challenges include:
-
-- Integrating an embedded graph database with a scalable application architecture.
-- Supporting different data types, including documents, tables, structured records, and code, within a unified knowledge graph.
-- Designing an ontology-generation and entity-resolution workflow that remains transparent and editable.
-- Supporting multiple embedding models without mixing incompatible vector spaces.
-- Maintaining source provenance across ingestion, graph construction, retrieval, and AI-generated responses.
-- Bridging local graph development with Neo4j Aura while accounting for differences in Cypher capabilities, indexes, constraints, and data types.
-- Designing secure MCP connectivity without exposing database credentials or unrestricted write access to external agents.
-- Keeping the platform developer-friendly while addressing enterprise requirements such as isolation, governance, security, and auditability.
+- **Bridging Relate and Neo4j Aura Without Query Rewrites:** Embedded Relate and Neo4j Aura differ in index DDL, constraint syntax, vector index rules, and tier memory limits. We had to build a versioned capability registry (`SUPPORTED`, `RECREATE`, `TRANSFORM`, `UNSUPPORTED`, `REQUIRES_MANUAL_REVIEW`), a Portability Compiler, and pre-flight Aura vector-index fit checks so developers catch incompatibilities before deployment.
+- **Preventing Vector Space Corruption:** Supporting multiple embedding models across prose, tables, and code risked mixing incompatible embeddings. We enforced strict profile isolation so cosine similarity $\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\| \|\mathbf{v}\|}$ is only ever computed within matching `(provider, model_id, dimensions)` spaces.
+- **Safe, Repeatable Cloud Migrations:** Startups rarely perform a single one-time cutover; they iterate locally and sync updates to staging/production. Designing resumable, idempotent merge-upsert batch transfers over Bolt—complete with dry-run gates, explicit disclosure of target mutations, count/sample verification, and audit manifests—required strict state boundaries.
+- **Multi-Format Ingestion with Provenance:** Parsing CSV, JSON, PDF, and DOCX files while maintaining exact source-to-node lineage and transparent, editable ontology proposals required decoupling document parsing from schema-constrained AI extraction.
+- **Secure Agent Access & Team Secret Hygiene:** Exposing graph tools to external coding agents over MCP without leaking Aura credentials or allowing unrestricted graph mutations meant enforcing project-scoped read-only defaults, bounded query limits, and runtime secret resolution via OS keychains and mounted files rather than committing secrets.
 
 ## Accomplishments that we're proud of
 
-We established a unified product vision that connects graph database development, AI-powered knowledge engineering, GraphRAG, and agent integration.
+We delivered all core milestones (A–E) and releases (R1–R6), turning Relating into a working end-to-end GraphRAG and Graph DevOps platform:
 
-Some of the most important accomplishments are:
-
-- A domain-agnostic architecture that can work with different types of enterprise and developer data.
-- A local-first approach that makes graph development accessible without requiring cloud infrastructure.
-- A clear separation between graph storage, AI intelligence, and application services.
-- A provider-independent AI architecture designed for both local and hosted models.
-- An MCP-first integration strategy that brings graph knowledge closer to AI coding assistants and autonomous agents.
-- A migration strategy connecting local Relate development with Neo4j Aura.
-- An open-core product direction that supports individual developers as well as enterprise adoption.
-
-Most importantly, Relating is designed not just to store connected data, but to make that data useful to developers, applications, and AI agents.
+- **Zero-Rewrite Relate $\leftrightarrow$ Aura Backend Flip:** Developers prototype locally against Relate and switch production traffic to Neo4j Aura through a unified backend abstraction without rewriting application queries.
+- **Full Graph DevOps Lifecycle:** Beyond basic CRUD and visualization, Relating ships with schema-as-code diffing, a Cypher Portability Compiler, GitHub Actions CI/CD gates, dual-backend shadow testing, a GraphRAG trace debugger, synthetic data generation, and a performance/sizing advisor.
+- **Complete Multi-Format Ingestion & Hybrid GraphRAG:** End-to-end ingestion across CSV, JSON, text, PDF, and DOCX with human-in-the-loop ontology approval, multi-profile embeddings, hybrid RRF retrieval, and grounded Q&A with citations.
+- **Verified Aura Migration with Pre-Flight Fit Checks:** Automated Aura tier and vector-index compatibility validation, dry-run simulation, idempotent merge-upsert transfer over Bolt, and post-migration verification reports.
+- **MCP-First & Team-Ready Architecture:** Out-of-the-box MCP connectivity for Claude Code, Codex, and Cursor, backed by PostgreSQL team metadata provisioning and OS keychain / secret-file credential management.
 
 ## What we learned
 
-We learned that building effective GraphRAG applications requires much more than combining a vector database with an LLM.
-
-Reliable knowledge engineering requires ontology management, entity resolution, provenance, hybrid retrieval, evaluation, and continuous validation.
-
-We also recognized that developer adoption depends heavily on simplicity. Developers should be able to start locally, experiment with their own data, connect their preferred AI tools, and scale when needed.
-
-Another important learning was that MCP can provide a common integration layer between graph knowledge systems and the rapidly evolving ecosystem of AI coding assistants and agents.
-
-Finally, graph portability and interoperability must be designed into the architecture from the beginning rather than treated as a final migration task.
+- **Graph Portability Must Be Built In From Day One:** Treating cloud migration as an afterthought leads to painful rewrites. Designing `GraphBackend` abstractions, schema-as-code, and portability checks into the core architecture makes local-to-cloud graduation predictable.
+- **GraphRAG Needs Engineering Rigor Beyond Vector Search:** Reliable answers depend on approval-gated ontologies, entity resolution, strict embedding-space isolation, hybrid retrieval, and trace-level evaluation.
+- **Developer Adoption Hinges on Day-One Simplicity:** Letting a developer run `./start.sh` with zero cloud accounts, experiment on local PDFs and CSVs, connect their favorite AI coding agent via MCP, and only spin up Neo4j Aura when ready removes the biggest barrier to graph adoption.
+- **Transparency Builds Trust in AI & Migrations:** Whether an AI is proposing an ontology or a migration engine is writing batches to Neo4j Aura, explicit dry runs, merge-upsert disclosures, and approval gates are essential for developer confidence.
 
 ## What's next for Relating
 
-Our immediate focus is to deliver a fully working MVP as quickly as possible, with a complete end-to-end developer workflow.
+With the core platform, Graph DevOps tooling, and Relate-to-Aura migration pipeline complete, our next steps focus on enterprise scale and ecosystem expansion:
 
-Our roadmap includes:
-
-1. **Local Graph Workbench:** Project creation, Relate integration, graph visualization, and Cypher querying.
-2. **AI Knowledge Engineering:** Document and structured-data ingestion, ontology generation, entity extraction, and relationship mapping.
-3. **Complete GraphRAG Pipeline:** Multiple embedding profiles, hybrid retrieval, grounded AI responses, and evaluation.
-4. **MCP Ecosystem:** Working integration with Claude Code, Codex, Cursor, and generic MCP clients.
-5. **Neo4j Aura Migration:** Compatibility analysis, migration planning, controlled data transfer, and verification.
-6. **Developer Ecosystem:** CLI, APIs, SDKs, Docker deployment, and extensible connectors.
-7. **Enterprise Readiness:** Multi-user collaboration, RBAC, audit trails, secure deployments, and governance.
-
-Our long-term vision is to make Relating a universal graph intelligence development environment — where developers can build knowledge graphs locally, connect AI agents seamlessly, and take their applications from experimentation to enterprise production.
+1. **Automated Change-Data-Capture (CDC) & Continuous Sync:** Evolving our idempotent merge-upsert transfers into automated incremental synchronization with conflict reconciliation between local/staging graphs and Aura.
+2. **Enterprise Identity & Vault Integration:** Adding OIDC single sign-on, granular role-based access control (RBAC), exportable compliance audit logs, and HashiCorp Vault / cloud KMS secret backends.
+3. **Expanded Data Connectors & Language SDKs:** Adding native SQL database and REST API connectors alongside ergonomic Python and TypeScript client SDKs.
+4. **Desktop & Kubernetes Packaging:** Shipping standalone desktop builds via Tauri and Helm charts for multi-tenant Kubernetes deployments.
 
 **Relating — Connect your data. Understand your knowledge. Empower your agents.**

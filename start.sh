@@ -13,11 +13,57 @@
 #   -h, --help         Show this help
 #
 # Environment overrides: RELATING_PORT, RELATING_HOST, RELATING_DATA_DIR,
-# RELATING_DATABASE_URL, RELATING_LOG_LEVEL.
+# RELATING_DATABASE_URL, RELATING_LOG_LEVEL, RELATING_MCP_TOKEN,
+# RELATING_SECRET_BACKEND, AURA_PASSWORD. Any of these can be set in a `.env`
+# file in this directory (see .env.example) instead of exporting them.
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load $ROOT/.env when present. Variables already exported in the environment
+# win; the file only fills in what is unset. Parsed safely without executing
+# anything: blank lines, `#` comments, `export KEY=value`, and single/double
+# quotes are supported.
+load_dotenv() {
+    local file="$ROOT/.env" line key value
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        [[ "$line" == export\ * ]] && line="${line#export }"
+        if [[ "$line" != *=* ]]; then
+            echo "Ignoring bad line in .env: $line" >&2
+            continue
+        fi
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"
+        if [[ "$value" == \"* ]]; then
+            value="${value#\"}"
+            value="${value%%\"*}"
+        elif [[ "$value" == \'* ]]; then
+            value="${value#\'}"
+            value="${value%%\'*}"
+        else
+            value="${value%%#*}"
+            value="${value%"${value##*[![:space:]]}"}"
+        fi
+        if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            echo "Ignoring bad variable name in .env: $key" >&2
+            continue
+        fi
+        if [[ -z "${!key+x}" ]]; then
+            printf -v "$key" '%s' "$value"
+            export "$key"
+        fi
+    done < "$file"
+    echo "==> Loaded environment from $file (already-exported variables take precedence)."
+}
+load_dotenv
+
 PORT="${RELATING_PORT:-8080}"
 HOST="${RELATING_HOST:-127.0.0.1}"
 DATA_DIR="${RELATING_DATA_DIR:-$ROOT/data}"
@@ -42,13 +88,23 @@ Options:
   -h, --help         Show this help
 
 Environment overrides: RELATING_PORT, RELATING_HOST, RELATING_DATA_DIR,
-RELATING_DATABASE_URL, RELATING_LOG_LEVEL.
+RELATING_DATABASE_URL, RELATING_LOG_LEVEL, RELATING_MCP_TOKEN,
+RELATING_SECRET_BACKEND, AURA_PASSWORD.
+
+A `.env` file next to this script (see .env.example) is loaded automatically;
+already-exported variables take precedence over it.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --port) PORT="$2"; shift 2 ;;
+        --port)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "--port needs a value" >&2
+                usage >&2
+                exit 1
+            fi
+            PORT="$2"; shift 2 ;;
         --release) RELEASE=1; shift ;;
         --rebuild-web) REBUILD_WEB=1; shift ;;
         --skip-web-build) SKIP_WEB_BUILD=1; shift ;;
@@ -66,6 +122,11 @@ need() {
 need cargo "install Rust via https://rustup.rs"
 need node "install Node.js 20+"
 need npm "install npm (bundled with Node.js)"
+
+node_major="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
+if [[ "$node_major" -lt 20 ]]; then
+    echo "Warning: Node.js 20+ is required, found $(node --version 2>/dev/null || echo unknown). The web build may fail." >&2
+fi
 
 if [[ "$REBUILD_WEB" -eq 1 && "$SKIP_WEB_BUILD" -eq 1 ]]; then
     echo "--rebuild-web and --skip-web-build cannot be combined" >&2
@@ -114,6 +175,11 @@ export RELATING_LOG_LEVEL="$LOG_LEVEL"
 echo "==> Starting Relating at http://$HOST:$PORT"
 echo "    Open that URL in your browser to use the workbench."
 echo "    API base: http://$HOST:$PORT/api/v1  |  Data: $DATA_DIR"
+if [[ -n "${RELATING_MCP_TOKEN:-}" ]]; then
+    echo "    MCP: stdio + HTTP transport enabled"
+else
+    echo "    MCP: stdio only (set RELATING_MCP_TOKEN in .env to enable the HTTP transport)"
+fi
 if [[ "$RELEASE" -eq 1 ]]; then
     echo "==> Building release binary (first run takes a few minutes)..."
     cd "$ROOT" && exec cargo run --quiet --release -p relating-server
