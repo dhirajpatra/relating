@@ -162,13 +162,16 @@ services:
         required: false
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-relating-neo4j}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-relating-neo4j}
-      NEO4J_dbms_default__database: ${NEO4J_DATABASE:-neo4j}
+      # NB: every NEO4J_* var is parsed as a Neo4j config setting, so the
+      # healthcheck password lives under a non-NEO4J_ name. No other NEO4J_*
+      # settings: the stock defaults (incl. the `neo4j` database) are what
+      # migration testing needs, and unknown settings fail strict validation.
+      RELATING_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-relating-neo4j}
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_PASSWORD:-relating-neo4j}\" 'RETURN 1 AS ok'"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${RELATING_NEO4J_PASSWORD:-relating-neo4j}\" 'RETURN 1 AS ok'"]
       interval: 15s
       timeout: 10s
       retries: 10

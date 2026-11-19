@@ -23,13 +23,26 @@ if [ "$MODE" = "db-init" ]; then
     fi
     # init-postgres is idempotent, so retrying until Postgres accepts
     # connections is safe. check-postgres is read-only validation.
+    # Authentication failures are NOT retried: they mean the password in
+    # use differs from the one the pgdata volume was initialized with
+    # (Postgres ignores POSTGRES_PASSWORD on existing volumes).
     ATTEMPTS="${DB_INIT_ATTEMPTS:-30}"
     i=1
     while [ "$i" -le "$ATTEMPTS" ]; do
-        if relating db init-postgres --url "$PG_URL"; then
+        if out=$(relating db init-postgres --url "$PG_URL" 2>&1); then
+            echo "$out"
             echo "db-init: schema ready, validating..."
             exec relating db check-postgres --url "$PG_URL"
         fi
+        echo "$out" >&2
+        case "$out" in
+            *"authentication failed"*)
+                echo "db-init: password rejected; fix with:" >&2
+                echo "  docker compose exec postgres psql -U postgres -c \"ALTER USER ${POSTGRES_USER:-relating} PASSWORD '<password-from-.env>';\"" >&2
+                echo "or reset the volume (deletes all stack data): docker compose down -v && docker compose up" >&2
+                exit 1
+                ;;
+        esac
         echo "db-init: Postgres not ready (attempt $i/$ATTEMPTS), retrying..." >&2
         i=$((i + 1))
         sleep 2
