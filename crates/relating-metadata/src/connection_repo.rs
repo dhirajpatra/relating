@@ -144,12 +144,20 @@ pub async fn list_aura_connections_including_env(
 /// never call this: listing and testing keep working against the transient
 /// connection without writing. On a display-name clash with an unrelated
 /// stored row, the materialized copy takes a suffixed name.
+///
+/// A stored row that is itself env-managed (its id is the stable id of its
+/// own URI) is refreshed from the current environment when the URI still
+/// matches but other fields drifted — so correcting `.env` (for example a
+/// wrong `AURA_DATABASE`) heals the materialized row instead of leaving a
+/// stale copy that keeps shadowing the fix.
 pub async fn ensure_aura_connection(
     pool: &SqlitePool,
     conn: &AuraConnection,
 ) -> Result<AuraConnection, RelatingError> {
     if let Some(stored) = get_aura_connection(pool, &conn.id).await? {
-        return Ok(stored);
+        return Ok(refresh_env_managed_row(pool, &stored)
+            .await?
+            .unwrap_or(stored));
     }
     let mut candidate = conn.clone();
     for attempt in 0..4 {
@@ -185,6 +193,55 @@ pub async fn ensure_aura_connection(
     Err(RelatingError::Database(
         "Failed to materialize the Aura connection: display-name clash".to_string(),
     ))
+}
+
+/// Refresh an env-managed stored row from the current environment.
+///
+/// Returns `Ok(None)` when the row is user-managed (random id) or the
+/// environment no longer describes its URI (changed `AURA_URI` or missing
+/// password): such rows are left untouched. Otherwise returns the row with
+/// name/username/database/auth brought in sync when they drifted.
+async fn refresh_env_managed_row(
+    pool: &SqlitePool,
+    stored: &AuraConnection,
+) -> Result<Option<AuraConnection>, RelatingError> {
+    if relating_core::aura_env_connection_id(&stored.uri) != stored.id {
+        return Ok(None);
+    }
+    let Some(current) = relating_core::aura_connection_from_env(&stored.project_id) else {
+        return Ok(None);
+    };
+    if current.uri != stored.uri {
+        return Ok(None);
+    }
+    if current.name == stored.name
+        && current.username == stored.username
+        && current.database == stored.database
+        && current.auth_env_var == stored.auth_env_var
+    {
+        return Ok(None);
+    }
+    sqlx::query(
+        r#"
+        UPDATE aura_connections
+        SET name = ?, username = ?, database = ?, auth_env_var = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(&current.name)
+    .bind(&current.username)
+    .bind(current.database.clone())
+    .bind(&current.auth_env_var)
+    .bind(stored.id.to_string())
+    .execute(pool)
+    .await
+    .map_err(|e| RelatingError::Database(format!("Failed to refresh Aura connection: {}", e)))?;
+    let mut refreshed = stored.clone();
+    refreshed.name = current.name;
+    refreshed.username = current.username;
+    refreshed.database = current.database;
+    refreshed.auth_env_var = current.auth_env_var;
+    Ok(Some(refreshed))
 }
 
 pub async fn delete_aura_connection(
@@ -293,5 +350,58 @@ mod tests {
         let stored = ensure_aura_connection(&pool, &conn).await.unwrap();
         assert_eq!(stored.id, conn.id);
         assert_eq!(stored.name, "aura (env) 2");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_refreshes_env_managed_row_on_drift() {
+        // Only test in this binary touching AURA_*; no serial guard needed.
+        let saved: Vec<(String, Option<String>)> = [
+            "AURA_URI",
+            "AURA_USERNAME",
+            "AURA_DATABASE",
+            "AURA_NAME",
+            "AURA_PASSWORD",
+            "AURA_PASSWORD_FILE",
+            "RELATING_SECRET_BACKEND",
+        ]
+        .iter()
+        .map(|n| (n.to_string(), std::env::var(n).ok()))
+        .collect();
+        std::env::set_var("AURA_URI", "neo4j+s://refresh.databases.neo4j.io");
+        std::env::set_var("AURA_PASSWORD", "test-password");
+        std::env::set_var("AURA_DATABASE", "wrongdb");
+
+        let outcome = async {
+            let pool = init_in_memory_db().await.unwrap();
+            let project = seed_project(&pool).await;
+
+            // Materialize with the wrong database, as an earlier plan did.
+            let stale =
+                relating_core::aura_connection_from_env(&project.id).expect("env connection");
+            assert_eq!(stale.database.as_deref(), Some("wrongdb"));
+            insert_aura_connection(&pool, &stale).await.unwrap();
+
+            // Correct .env, then ensure heals the row instead of shadowing it.
+            std::env::set_var("AURA_DATABASE", "neo4j");
+            let fixed =
+                relating_core::aura_connection_from_env(&project.id).expect("env connection");
+            let stored = ensure_aura_connection(&pool, &fixed).await.unwrap();
+            assert_eq!(stored.id, stale.id);
+            assert_eq!(stored.database.as_deref(), Some("neo4j"));
+            let refetched = get_aura_connection(&pool, &stale.id)
+                .await
+                .unwrap()
+                .expect("row persists");
+            assert_eq!(refetched.database.as_deref(), Some("neo4j"));
+        }
+        .await;
+
+        for (name, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(&name, v),
+                None => std::env::remove_var(&name),
+            }
+        }
+        outcome
     }
 }

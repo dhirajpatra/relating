@@ -74,7 +74,7 @@ derives a usable connection automatically — no stored connection needed:
 ```bash
 AURA_URI=neo4j+s://xxxxxx.databases.neo4j.io
 AURA_USERNAME=neo4j        # optional, default neo4j
-AURA_DATABASE=neo4j        # optional
+AURA_DATABASE=neo4j        # optional, database name (NOT the instance id)
 AURA_NAME=aura (env)       # optional display name
 export AURA_PASSWORD='<secret>'
 ```

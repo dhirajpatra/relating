@@ -79,7 +79,23 @@ impl BoltBackend {
 impl Neo4jBackend for BoltBackend {
     async fn test_connection(&self) -> Result<TargetInfo, MigrateError> {
         // Always a fresh connection: validates URI, TLS, and credentials.
-        let client = BoltClient::connect(&self.config).await?;
+        let mut client = BoltClient::connect(&self.config).await?;
+        // A bare HELLO never selects a database, so a wrong database name
+        // would report "connected" here and fail later at first write.
+        // Validate it now with an explicit transaction that reads nothing.
+        if let Some(database) = self.config.database.clone() {
+            if let Err(e) = client.begin(Some(&database)).await {
+                let msg = e.to_string();
+                if msg.contains("DatabaseNotFound") {
+                    return Err(MigrateError::Protocol(format!(
+                        "Database '{}' not found on the target (the instance ID is not a database name; use the database name from the Aura console, usually 'neo4j')",
+                        database
+                    )));
+                }
+                return Err(e);
+            }
+            let _ = client.rollback().await;
+        }
         Ok(TargetInfo {
             server_agent: client.server_agent.clone(),
             bolt_major: client.negotiated_major,
@@ -95,12 +111,24 @@ impl Neo4jBackend for BoltBackend {
     ) -> Result<Vec<Vec<BoltValue>>, MigrateError> {
         let mut guard = self.client.lock().await;
         self.ensure_connected(&mut guard).await?;
-        let result = guard
-            .as_mut()
-            .expect("client just connected")
-            .run(query, params)
-            .await
-            .map(|(rows, _)| rows);
+        let client = guard.as_mut().expect("client just connected");
+        // Mirror run_write: with a database configured, reads must select
+        // it too, otherwise they silently hit the server default database.
+        let result = if self.config.database.is_some() {
+            let database = self.config.database.clone();
+            match client.begin(database.as_deref()).await {
+                Ok(()) => match client.run(query, params).await {
+                    Ok((rows, _)) => client.commit().await.map(|_| rows),
+                    Err(e) => {
+                        let _ = client.rollback().await;
+                        Err(e)
+                    }
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            client.run(query, params).await.map(|(rows, _)| rows)
+        };
         if matches!(
             result,
             Err(MigrateError::Connection(_)) | Err(MigrateError::Protocol(_))
