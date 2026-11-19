@@ -10,11 +10,12 @@ usage or config error. All commands accept `--data-dir`, `--database-url`
 - `relating validate --project ID [--all] [--connection CID] [--eval-questions FILE]`
   Always runs schema conformance, data integrity (uid coverage, duplicate
   merge keys, orphan warnings), and embedding index health. `--all` adds Aura
-  compatibility (needs `--connection`) and a retrieval mini-eval (needs
-  `--eval-questions`, one question per line); missing optionals are reported
-  as skipped, never failed.
-- `relating aura analyze --project ID --connection CID` — source + target
+  compatibility (needs `--connection` or `AURA_URI` + `AURA_PASSWORD` in the
+  environment) and a retrieval mini-eval (needs `--eval-questions`, one
+  question per line); missing optionals are reported as skipped, never failed.
+- `relating aura analyze --project ID [--connection CID]` — source + target
   compatibility; fails on `UNSUPPORTED` verdicts or unreachable targets.
+  Without `--connection`, the `.env` Aura connection is used when available.
 - `relating test graph --project ID [--revision N]` — graph contract tests
   against the latest (or pinned) schema revision.
 - `relating schema export --project ID --out DIR` — writes the five

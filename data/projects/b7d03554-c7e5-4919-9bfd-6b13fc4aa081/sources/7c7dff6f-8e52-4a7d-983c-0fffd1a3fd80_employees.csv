@@ -1,0 +1,25 @@
+name,role,company,city,company_id,role_id,city_id
+Ada Lovelace,Data Engineer,Northwind,Lisbon,Northwind,Data Engineer,Lisbon
+Alan Turing,ML Engineer,Northwind,Lisbon,Northwind,ML Engineer,Lisbon
+Grace Hopper,Backend Engineer,Initech,Porto,Initech,Backend Engineer,Porto
+Linus Torvalds,DevOps Engineer,Initech,Porto,Initech,DevOps Engineer,Porto
+Margaret Hamilton,QA Engineer,Globex,Madrid,Globex,QA Engineer,Madrid
+Tim Berners-Lee,Frontend Engineer,Globex,Madrid,Globex,Frontend Engineer,Madrid
+Barbara Liskov,Data Engineer,Initech,Porto,Initech,Data Engineer,Porto
+Donald Knuth,ML Engineer,Northwind,Coimbra,Northwind,ML Engineer,Coimbra
+Edsger Dijkstra,Backend Engineer,Globex,Madrid,Globex,Backend Engineer,Madrid
+Radia Perlman,DevOps Engineer,Umbrella,Barcelona,Umbrella,DevOps Engineer,Barcelona
+Katherine Johnson,QA Engineer,Umbrella,Barcelona,Umbrella,QA Engineer,Barcelona
+John von Neumann,Frontend Engineer,Northwind,Coimbra,Northwind,Frontend Engineer,Coimbra
+Claude Shannon,Data Engineer,Globex,Valencia,Globex,Data Engineer,Valencia
+Richard Hamming,ML Engineer,Umbrella,Barcelona,Umbrella,ML Engineer,Barcelona
+Frances Allen,Backend Engineer,Northwind,Lisbon,Northwind,Backend Engineer,Lisbon
+Ken Thompson,DevOps Engineer,Globex,Valencia,Globex,DevOps Engineer,Valencia
+Dennis Ritchie,QA Engineer,Initech,Braga,Initech,QA Engineer,Braga
+Bjarne Stroustrup,Frontend Engineer,Umbrella,Seville,Umbrella,Frontend Engineer,Seville
+Guido van Rossum,Data Engineer,Initech,Braga,Initech,Data Engineer,Braga
+Yukihiro Matsumoto,ML Engineer,Globex,Valencia,Globex,ML Engineer,Valencia
+James Gosling,Backend Engineer,Umbrella,Seville,Umbrella,Backend Engineer,Seville
+Anders Hejlsberg,DevOps Engineer,Northwind,Coimbra,Northwind,DevOps Engineer,Coimbra
+Brendan Eich,QA Engineer,Initech,Braga,Initech,QA Engineer,Braga
+Sheryl Sandberg,Frontend Engineer,Globex,Madrid,Globex,Frontend Engineer,Madrid

@@ -103,6 +103,39 @@ pub async fn list_aura_connections(
     Ok(out)
 }
 
+/// Fetch a connection by id, resolving the `.env` connection on a miss.
+///
+/// Stored connections always win. When no stored row matches, the
+/// environment-derived connection is returned if its stable id matches the
+/// requested id (and the password still resolves); otherwise `None`.
+pub async fn get_aura_connection_resolving_env(
+    pool: &SqlitePool,
+    project_id: &ProjectId,
+    id: &AuraConnectionId,
+) -> Result<Option<AuraConnection>, RelatingError> {
+    if let Some(conn) = get_aura_connection(pool, id).await? {
+        return Ok(Some(conn));
+    }
+    Ok(relating_core::aura_connection_from_env(project_id).filter(|env| &env.id == id))
+}
+
+/// List stored connections plus the `.env` connection when available.
+///
+/// The env connection is appended only when no stored connection already
+/// points at the same URI, so operators never see the same target twice.
+pub async fn list_aura_connections_including_env(
+    pool: &SqlitePool,
+    project_id: &ProjectId,
+) -> Result<Vec<AuraConnection>, RelatingError> {
+    let mut conns = list_aura_connections(pool, project_id).await?;
+    if let Some(env) = relating_core::aura_connection_from_env(project_id) {
+        if !conns.iter().any(|c| c.uri == env.uri) {
+            conns.push(env);
+        }
+    }
+    Ok(conns)
+}
+
 pub async fn delete_aura_connection(
     pool: &SqlitePool,
     id: &AuraConnectionId,

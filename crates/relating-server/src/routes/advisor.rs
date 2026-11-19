@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::routes::aura::build_backend;
+use crate::routes::aura::{build_backend, get_connection};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -10,7 +10,7 @@ use relating_advisor::{
 };
 use relating_core::{AuraConnectionId, ProjectId};
 use relating_graph::GraphBackend;
-use relating_metadata::{get_aura_connection as db_get_connection, get_project as db_get_project};
+use relating_metadata::get_project as db_get_project;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_ADVISOR_QUERIES: usize = 50;
@@ -124,9 +124,7 @@ pub async fn analyze_handler(
         let conn_id = AuraConnectionId::parse(&conn_id_str).map_err(|e| {
             AppError::BadRequest(format!("Invalid Connection UUID '{}': {}", conn_id_str, e))
         })?;
-        let conn = db_get_connection(&state.pool, &conn_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("Connection '{}' not found", conn_id)))?;
+        let conn = get_connection(&state.pool, &project_id, &conn_id).await?;
         let backend = build_backend(&conn, None)?;
         let pairs: Vec<(String, String)> = payload
             .queries

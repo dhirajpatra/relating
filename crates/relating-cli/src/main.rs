@@ -5,9 +5,9 @@ use relating_cli::checks::{
 use relating_cli::error::CliError;
 use relating_cli::eval_runner::run_eval_questions;
 use relating_cli::output::{render_validate, OutputFormat, ValidateReport};
-use relating_core::{AuraConnectionId, ProjectId, RetrievalStrategy};
+use relating_core::{AuraConnection, AuraConnectionId, ProjectId, RetrievalStrategy};
 use relating_graph::GraphBackend;
-use relating_metadata::{get_aura_connection, init_db};
+use relating_metadata::{get_aura_connection_resolving_env, init_db};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -19,15 +19,18 @@ fn usage() -> ! {
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  validate --project ID [--all] [--connection CID] [--eval-questions FILE]");
-    eprintln!("  aura analyze --project ID --connection CID");
+    eprintln!("  aura analyze --project ID [--connection CID]");
     eprintln!("  test graph --project ID [--revision N]");
     eprintln!("  schema export --project ID --out DIR");
     eprintln!("  schema diff --project ID --file schema.json");
     eprintln!("  eval run --project ID --questions FILE [--strategy S] [--min-grounded F]");
-    eprintln!("  shadow run --project ID --connection CID --queries FILE");
+    eprintln!("  shadow run --project ID [--connection CID] --queries FILE");
     eprintln!("  debug trace --project ID --question TEXT [--strategy S] [--no-ai]");
     eprintln!("  synth generate --project ID --out FILE [--scale F] [--seed N] [--edge-cases a,b] [--materialize]");
     eprintln!("  advisor analyze --project ID --queries FILE [--connection CID] [--measure] [--fail-on-warning]");
+    eprintln!();
+    eprintln!("  --connection accepts a stored connection ID or 'env'. Without it,");
+    eprintln!("  AURA_URI + AURA_PASSWORD from .env are used when available.");
     eprintln!("  demo seed [--name NAME]   (create a seeded demo project; prints its ID)");
     eprintln!(
         "  secrets set --name NAME --from-file PATH   (OS keychain; needs --features os-keychain)"
@@ -132,6 +135,64 @@ fn parse_project_id(value: &str) -> Result<ProjectId, CliError> {
     ProjectId::parse(value).map_err(|e| CliError::Usage(format!("Invalid project ID: {}", e)))
 }
 
+/// Resolve an Aura connection for commands that can target Aura.
+///
+/// An explicit `--connection` wins: the value `env` selects the `AURA_URI`
+/// connection from the environment, anything else must be a stored id (the
+/// env connection's stable id also matches). Without the flag, the env
+/// connection is used when available, otherwise `None` so callers can skip
+/// or fail with a helpful message.
+async fn resolve_connection(
+    ctx: &Context,
+    flags: &HashMap<String, String>,
+) -> Result<Option<AuraConnection>, CliError> {
+    match flags.get("connection") {
+        Some(raw) if raw.trim().eq_ignore_ascii_case("env") => {
+            match relating_core::aura_connection_from_env(&ctx.project_id) {
+                Some(conn) => {
+                    eprintln!(
+                        "Using Aura connection from environment: '{}' ({})",
+                        conn.name, conn.uri
+                    );
+                    Ok(Some(conn))
+                }
+                None => {
+                    let status = relating_core::aura_env_status();
+                    Err(CliError::Usage(format!(
+                        "--connection env requested but unavailable: {}",
+                        status.reason
+                    )))
+                }
+            }
+        }
+        Some(conn_id_str) => {
+            let conn_id = AuraConnectionId::parse(conn_id_str)
+                .map_err(|e| CliError::Usage(format!("Invalid connection ID: {}", e)))?;
+            get_aura_connection_resolving_env(&ctx.pool, &ctx.project_id, &conn_id)
+                .await?
+                .map(Some)
+                .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))
+        }
+        None => {
+            if let Some(conn) = relating_core::aura_connection_from_env(&ctx.project_id) {
+                eprintln!(
+                    "Using Aura connection from environment: '{}' ({})",
+                    conn.name, conn.uri
+                );
+                Ok(Some(conn))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+fn missing_connection_error() -> CliError {
+    CliError::Usage(
+        "Missing --connection and no Aura connection in the environment (set AURA_URI + AURA_PASSWORD, or pass --connection CID)".to_string(),
+    )
+}
+
 async fn open_context(opts: &GlobalOpts, project_id: &ProjectId) -> Result<Context, CliError> {
     let pool = init_db(&opts.database_url)
         .await
@@ -150,21 +211,17 @@ async fn cmd_validate(opts: &GlobalOpts, flags: &HashMap<String, String>) -> Res
     gates.push(check_index_health(&ctx).await?);
 
     if run_all {
-        // Aura compatibility when a connection is supplied, else an honest skip.
-        match flags.get("connection") {
-            Some(conn_id_str) => {
-                let conn_id = AuraConnectionId::parse(conn_id_str)
-                    .map_err(|e| CliError::Usage(format!("Invalid connection ID: {}", e)))?;
-                let conn = get_aura_connection(&ctx.pool, &conn_id)
-                    .await?
-                    .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
+        // Aura compatibility when a connection resolves, else an honest skip.
+        match resolve_connection(&ctx, flags).await? {
+            Some(conn) => {
                 gates.push(check_aura_compat(&ctx, Some(&conn)).await?);
             }
             None => {
                 let mut skipped = CheckOutcome::pass("aura-compat");
-                skipped
-                    .warnings
-                    .push("Skipped: pass --connection to include Aura analysis".to_string());
+                skipped.warnings.push(
+                    "Skipped: pass --connection or set AURA_URI + AURA_PASSWORD to include Aura analysis"
+                        .to_string(),
+                );
                 gates.push(skipped);
             }
         }
@@ -236,13 +293,10 @@ async fn cmd_aura_analyze(
     flags: &HashMap<String, String>,
 ) -> Result<i32, CliError> {
     let project_id = parse_project_id(&require_flag(flags, "project")?)?;
-    let conn_id_str = require_flag(flags, "connection")?;
     let ctx = open_context(opts, &project_id).await?;
-    let conn_id = AuraConnectionId::parse(&conn_id_str)
-        .map_err(|e| CliError::Usage(format!("Invalid connection ID: {}", e)))?;
-    let conn = get_aura_connection(&ctx.pool, &conn_id)
+    let conn = resolve_connection(&ctx, flags)
         .await?
-        .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
+        .ok_or_else(missing_connection_error)?;
 
     let gate = check_aura_compat(&ctx, Some(&conn)).await?;
     let report = ValidateReport {
@@ -459,15 +513,12 @@ async fn cmd_shadow_run(
     flags: &HashMap<String, String>,
 ) -> Result<i32, CliError> {
     let project_id = parse_project_id(&require_flag(flags, "project")?)?;
-    let conn_id_str = require_flag(flags, "connection")?;
     let path = require_flag(flags, "queries")?;
     let ctx = open_context(opts, &project_id).await?;
 
-    let conn_id = AuraConnectionId::parse(&conn_id_str)
-        .map_err(|e| CliError::Usage(format!("Invalid connection ID: {}", e)))?;
-    let conn = get_aura_connection(&ctx.pool, &conn_id)
+    let conn = resolve_connection(&ctx, flags)
         .await?
-        .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
+        .ok_or_else(missing_connection_error)?;
     let password = relating_core::resolve_secret(&conn.auth_env_var).map_err(CliError::Usage)?;
     let uri = relating_migrate::BoltUri::parse(&conn.uri).map_err(CliError::Migrate)?;
     let mut config = relating_migrate::BoltConfig::new(uri, conn.username.clone(), password);
@@ -741,12 +792,9 @@ async fn cmd_advisor_analyze(
     let sizing = relating_advisor::estimate_sizing(schema.node_count, schema.relationship_count);
 
     let measurements = if flags.contains_key("measure") {
-        let conn_id_str = require_flag(flags, "connection")?;
-        let conn_id = AuraConnectionId::parse(&conn_id_str)
-            .map_err(|e| CliError::Usage(format!("Invalid connection ID: {}", e)))?;
-        let conn = get_aura_connection(&ctx.pool, &conn_id)
+        let conn = resolve_connection(&ctx, flags)
             .await?
-            .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
+            .ok_or_else(missing_connection_error)?;
         let password =
             relating_core::resolve_secret(&conn.auth_env_var).map_err(CliError::Usage)?;
         let uri = relating_migrate::BoltUri::parse(&conn.uri).map_err(CliError::Migrate)?;
@@ -996,6 +1044,8 @@ async fn cmd_db_init_postgres(
 
 #[tokio::main]
 async fn main() {
+    // `.env` fills in unset variables only; real env always wins.
+    relating_core::load_dotenv();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         usage();

@@ -63,4 +63,30 @@ default features; a compile-time guard rejects the in-memory mock fallback).
 Aura connection passwords (`auth_env_var`, default `AURA_PASSWORD`) resolve
 through this chain in the API server, the MCP server, and the CLI (`shadow
 run`, `advisor analyze --measure`). Connection records still store only the
-variable *name*.
+variable *name*. The Meta API key (`META_API_KEY`, alias `MODEL_API_KEY`)
+resolves through the same chain.
+
+## Aura connection straight from `.env`
+
+When `AURA_URI` plus a resolvable `AURA_PASSWORD` are present, Relating
+derives a usable connection automatically — no stored connection needed:
+
+```bash
+AURA_URI=neo4j+s://xxxxxx.databases.neo4j.io
+AURA_USERNAME=neo4j        # optional, default neo4j
+AURA_DATABASE=neo4j        # optional
+AURA_NAME=aura (env)       # optional display name
+export AURA_PASSWORD='<secret>'
+```
+
+- The API lists it alongside stored connections (`GET .../connections/aura`)
+  under a stable id (SHA-256 of the URI), so test, migrate, shadow, advisor,
+  cypher-proxy and portability calls accept it like any stored id.
+- The CLI uses it when `--connection` is omitted (`validate --all`, `aura
+  analyze`, `shadow run`, `advisor analyze --measure`); `--connection env`
+  selects it explicitly.
+- Stored connections always win on id collisions, and the URI is never
+  duplicated when a stored connection already points at it.
+- `AURA_CLIENT_ID` / `AURA_CLIENT_SECRET` are Aura console API credentials
+  for instance management; Relating connects over Bolt, so only `AURA_URI` +
+  the password are used.

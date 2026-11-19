@@ -4,8 +4,8 @@ use relating_ai::create_ai_provider;
 use relating_core::{AuraConnectionId, Project, ProjectId, RetrievalStrategy};
 use relating_graph::GraphBackend;
 use relating_metadata::{
-    count_chunks_for_profile, get_aura_connection, get_evaluation, get_latest_ontology,
-    get_project, list_embedding_profiles, list_evaluations, list_sources,
+    count_chunks_for_profile, get_aura_connection_resolving_env, get_evaluation,
+    get_latest_ontology, get_project, list_embedding_profiles, list_evaluations, list_sources,
 };
 use relating_migrate::{
     analyze_project, preview_migration, proxied_read, BoltBackend, BoltConfig, BoltUri,
@@ -205,7 +205,7 @@ async fn read_cypher_fn(
         let conn_id = AuraConnectionId::parse(&connection_id).map_err(|e| {
             McpError::InvalidArguments(format!("Invalid connection id '{}': {}", connection_id, e))
         })?;
-        let conn = get_aura_connection(&state.pool, &conn_id)
+        let conn = get_aura_connection_resolving_env(&state.pool, project, &conn_id)
             .await?
             .ok_or_else(|| McpError::Scope(format!("Connection '{}' is not in scope", conn_id)))?;
         if conn.project_id != *project {
@@ -350,7 +350,7 @@ async fn analyze_aura_compatibility_fn(
             let conn_id = relating_core::AuraConnectionId::parse(&conn_id_str)
                 .map_err(|e| McpError::InvalidArguments(format!("Invalid connection id: {}", e)))?;
             Some(
-                get_aura_connection(&state.pool, &conn_id)
+                get_aura_connection_resolving_env(&state.pool, project, &conn_id)
                     .await?
                     .ok_or_else(|| {
                         McpError::InvalidArguments("Aura connection not found".to_string())
@@ -382,7 +382,7 @@ async fn preview_migration_fn(
     })?;
     let conn_id = relating_core::AuraConnectionId::parse(&conn_id_str)
         .map_err(|e| McpError::InvalidArguments(format!("Invalid connection id: {}", e)))?;
-    let conn = get_aura_connection(&state.pool, &conn_id)
+    let conn = get_aura_connection_resolving_env(&state.pool, project, &conn_id)
         .await?
         .ok_or_else(|| McpError::InvalidArguments("Aura connection not found".to_string()))?;
     if conn.project_id != *project {

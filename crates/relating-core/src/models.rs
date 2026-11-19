@@ -35,6 +35,7 @@ pub enum AiProviderType {
     Ollama,
     Anthropic,
     Mock,
+    MetaApi,
 }
 
 impl Default for AiProviderType {

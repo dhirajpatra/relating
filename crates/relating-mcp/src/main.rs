@@ -22,6 +22,8 @@ fn usage() -> ! {
 
 #[tokio::main]
 async fn main() {
+    // `.env` fills in unset variables only; real env always wins.
+    relating_core::load_dotenv();
     let mut args = std::env::args().skip(1).peekable();
     let mut stdio = false;
     let mut project: Option<String> = None;

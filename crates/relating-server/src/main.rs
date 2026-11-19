@@ -7,6 +7,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 0. Load `.env` from the working directory when present. Real
+    // environment variables always win; the file only fills in gaps.
+    // (start.sh loads it too; this covers direct `cargo run` invocations.)
+    relating_core::load_dotenv();
+
     // 1. Initialize structured logging
     let filter = std::env::var("RELATING_LOG_LEVEL")
         .unwrap_or_else(|_| "info,relating_server=debug,relating_graph=debug".to_string());
@@ -17,6 +22,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     info!("Starting Relating Control Plane & Workbench API...");
+
+    // Report which `.env`-driven integrations are live. Values are never
+    // logged, only availability.
+    if relating_ai::meta_backend_selected() {
+        if relating_ai::meta_ai_config_from_env().is_some() {
+            info!("LLM: Meta API selected via LLM_BACKEND=meta_api (Ollama fallback on error)");
+        } else {
+            info!("LLM: LLM_BACKEND=meta_api but no API key resolves (META_API_KEY/MODEL_API_KEY); project providers apply");
+        }
+    }
+    let aura_status = relating_core::aura_env_status();
+    if aura_status.available {
+        info!("Aura: .env connection available ({})", aura_status.reason);
+    } else {
+        info!("Aura: no .env connection ({})", aura_status.reason);
+    }
 
     // 2. Load configurations
     let port: u16 = std::env::var("RELATING_PORT")

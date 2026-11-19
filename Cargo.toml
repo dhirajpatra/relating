@@ -55,6 +55,7 @@ rand = "0.9"
 # no-ops via target-gated deps in keyring's manifest).
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
 sqlparser = "0.64"
+dotenvy = "0.15"
 base64 = "0.22"
 pdf-extract = "0.12"
 zip = "2.2"

@@ -1,11 +1,11 @@
 use crate::error::AppError;
-use crate::routes::aura::build_backend;
+use crate::routes::aura::{build_backend, get_connection};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
 use relating_core::{AuraConnectionId, ProjectId};
 use relating_graph::{GraphBackend, GraphQueryResult, GraphWriteResult};
-use relating_metadata::{get_aura_connection as db_get_connection, get_project as db_get};
+use relating_metadata::get_project as db_get;
 use relating_migrate::{json_to_bolt, proxied_read, summarize_write_meta, Neo4jBackend};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -50,9 +50,7 @@ async fn proxy_connection(
             connection_id, e
         ))
     })?;
-    let conn = db_get_connection(&state.pool, &conn_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Connection '{}' not found", conn_id)))?;
+    let conn = get_connection(&state.pool, project_id, &conn_id).await?;
     if conn.project_id != *project_id {
         return Err(AppError::NotFound(format!(
             "Connection '{}' not found",

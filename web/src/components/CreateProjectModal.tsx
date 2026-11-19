@@ -207,14 +207,27 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
             </div>
 
             <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-              {(['mock', 'openai', 'ollama'] as AiProviderType[]).map((t) => (
+              {(['mock', 'openai', 'ollama', 'meta_api'] as AiProviderType[]).map((t) => (
                 <button
                   key={t}
                   type="button"
                   onClick={() => {
                     setProviderType(t);
-                    if (t === 'ollama') setBaseUrl('http://localhost:11434/v1');
-                    if (t === 'openai') setBaseUrl('https://api.openai.com/v1');
+                    if (t === 'ollama') {
+                      setBaseUrl('http://localhost:11434/v1');
+                      setChatModel('llama3.1');
+                      setEmbeddingModel('nomic-embed-text');
+                    }
+                    if (t === 'openai') {
+                      setBaseUrl('https://api.openai.com/v1');
+                      setChatModel('gpt-4o-mini');
+                      setEmbeddingModel('text-embedding-3-small');
+                    }
+                    if (t === 'meta_api') {
+                      setBaseUrl('https://api.meta.ai/v1/responses');
+                      setChatModel('muse-spark-1.3-contributor');
+                      setEmbeddingModel('nomic-embed-text');
+                    }
                     if (t === 'mock') setBaseUrl('');
                   }}
                   style={{
@@ -230,7 +243,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                     textTransform: 'capitalize',
                   }}
                 >
-                  {t === 'mock' ? 'Mock / Offline' : t}
+                  {t === 'mock' ? 'Mock / Offline' : t === 'meta_api' ? 'Meta' : t}
                 </button>
               ))}
             </div>
@@ -257,16 +270,16 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                   />
                 </div>
 
-                {providerType === 'openai' && (
+                {(providerType === 'openai' || providerType === 'meta_api') && (
                   <div style={{ marginBottom: '0.75rem' }}>
                     <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      API Key
+                      API Key{providerType === 'meta_api' ? ' (blank = server .env key)' : ''}
                     </label>
                     <input
                       type="password"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
-                      placeholder="sk-..."
+                      placeholder={providerType === 'meta_api' ? 'LLM_... (or leave blank)' : 'sk-...'}
                       style={{
                         width: '100%',
                         padding: '0.4rem 0.6rem',

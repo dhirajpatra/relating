@@ -2675,9 +2675,11 @@ name = "relating-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dotenvy",
  "keyring",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "uuid",
 ]

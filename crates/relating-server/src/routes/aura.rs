@@ -6,8 +6,9 @@ use axum::Json;
 use chrono::Utc;
 use relating_core::{AuraConnection, AuraConnectionId, ProjectId};
 use relating_metadata::{
-    delete_aura_connection as db_delete, get_aura_connection as db_get,
-    get_project as db_get_project, insert_aura_connection, list_aura_connections as db_list,
+    delete_aura_connection as db_delete, get_aura_connection_resolving_env,
+    get_project as db_get_project, insert_aura_connection,
+    list_aura_connections_including_env as db_list,
 };
 use relating_migrate::{BoltBackend, BoltConfig, BoltUri, Neo4jBackend, TargetInfo};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,19 @@ pub struct ConnectionTestReport {
     pub bolt_version: Option<String>,
     pub database: Option<String>,
     pub message: String,
+}
+
+/// Fetch a connection for a project, resolving the `.env` connection when
+/// no stored row matches. All Aura-backed routes go through here so an
+/// `AURA_URI` in the environment is usable everywhere a stored id is.
+pub async fn get_connection(
+    pool: &relating_metadata::DbPool,
+    project_id: &ProjectId,
+    conn_id: &AuraConnectionId,
+) -> Result<AuraConnection, AppError> {
+    get_aura_connection_resolving_env(pool, project_id, conn_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Connection '{}' not found", conn_id)))
 }
 
 pub fn build_backend(
@@ -139,15 +153,13 @@ pub async fn test_connection_handler(
     State(state): State<AppState>,
     Path((id_str, conn_id_str)): Path<(String, String)>,
 ) -> Result<Json<ConnectionTestReport>, AppError> {
-    let _project_id = ProjectId::parse(&id_str)
+    let project_id = ProjectId::parse(&id_str)
         .map_err(|e| AppError::BadRequest(format!("Invalid Project UUID '{}': {}", id_str, e)))?;
     let conn_id = AuraConnectionId::parse(&conn_id_str).map_err(|e| {
         AppError::BadRequest(format!("Invalid Connection UUID '{}': {}", conn_id_str, e))
     })?;
 
-    let conn = db_get(&state.pool, &conn_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Connection '{}' not found", conn_id)))?;
+    let conn = get_connection(&state.pool, &project_id, &conn_id).await?;
 
     let backend = build_backend(&conn, None)?;
     let info: TargetInfo = backend.test_connection().await?;

@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::routes::aura::build_backend;
+use crate::routes::aura::{build_backend, get_connection};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -10,9 +10,8 @@ use relating_core::{
 };
 use relating_graph::GraphBackend;
 use relating_metadata::{
-    get_aura_connection as db_get_connection, get_migration as db_get_migration,
-    get_project as db_get_project, insert_migration, list_migrations as db_list_migrations,
-    update_migration,
+    get_migration as db_get_migration, get_project as db_get_project, insert_migration,
+    list_migrations as db_list_migrations, update_migration,
 };
 use relating_migrate::{
     analyze_project_with_options, dry_run, json_to_bolt, migrate_node_batch,
@@ -94,13 +93,7 @@ pub async fn analyze_migration_handler(
             let conn_id = AuraConnectionId::parse(&conn_id_str).map_err(|e| {
                 AppError::BadRequest(format!("Invalid Connection UUID '{}': {}", conn_id_str, e))
             })?;
-            Some(
-                db_get_connection(&state.pool, &conn_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::NotFound(format!("Connection '{}' not found", conn_id))
-                    })?,
-            )
+            Some(get_connection(&state.pool, &project_id, &conn_id).await?)
         }
         None => None,
     };
@@ -139,9 +132,7 @@ pub async fn plan_migration_handler(
             payload.connection_id, e
         ))
     })?;
-    let conn = db_get_connection(&state.pool, &conn_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Connection '{}' not found", conn_id)))?;
+    let conn = get_connection(&state.pool, &project_id, &conn_id).await?;
 
     let graph_path = state.project_graph_path(&project_id);
     let batch_size = payload
@@ -213,9 +204,9 @@ pub async fn dry_run_handler(
     let mut migration = db_get_migration(&state.pool, &mid)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Migration '{}' not found", mid)))?;
-    let conn = db_get_connection(&state.pool, &migration.connection_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Migration connection no longer exists".to_string()))?;
+    let conn = get_connection(&state.pool, &migration.project_id, &migration.connection_id)
+        .await
+        .map_err(|_| AppError::NotFound("Migration connection no longer exists".to_string()))?;
 
     let plan = parse_plan(&migration)?;
     let target_check = match build_backend(&conn, None) {
@@ -375,9 +366,9 @@ pub async fn execute_migration_handler(
         }
     }
 
-    let conn = db_get_connection(&state.pool, &migration.connection_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Migration connection no longer exists".to_string()))?;
+    let conn = get_connection(&state.pool, &migration.project_id, &migration.connection_id)
+        .await
+        .map_err(|_| AppError::NotFound("Migration connection no longer exists".to_string()))?;
     let backend = build_backend(&conn, None)?;
     // Fail fast before any remote write when credentials are wrong.
     backend.test_connection().await?;
@@ -506,9 +497,9 @@ pub async fn verify_migration_handler(
         ));
     }
 
-    let conn = db_get_connection(&state.pool, &migration.connection_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Migration connection no longer exists".to_string()))?;
+    let conn = get_connection(&state.pool, &migration.project_id, &migration.connection_id)
+        .await
+        .map_err(|_| AppError::NotFound("Migration connection no longer exists".to_string()))?;
     let backend = build_backend(&conn, None)?;
 
     let graph_path = state.project_graph_path(&project_id);

@@ -1,10 +1,10 @@
 use crate::error::AppError;
-use crate::routes::aura::build_backend;
+use crate::routes::aura::{build_backend, get_connection};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
 use relating_core::{AuraConnectionId, ProjectId};
-use relating_metadata::{get_aura_connection as db_get_connection, get_project as db_get_project};
+use relating_metadata::get_project as db_get_project;
 use relating_shadow::{mask_params, replay_suite, ShadowQuery, ShadowReport, SuiteOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -62,9 +62,7 @@ pub async fn run_shadow_handler(
             payload.connection_id, e
         ))
     })?;
-    let conn = db_get_connection(&state.pool, &conn_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Connection '{}' not found", conn_id)))?;
+    let conn = get_connection(&state.pool, &project_id, &conn_id).await?;
     let backend = build_backend(&conn, None)?;
 
     let graph_path = state.project_graph_path(&project_id);

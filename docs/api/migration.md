@@ -12,9 +12,13 @@ Portability Compiler (R3); R1 migrates data, schema objects, and contracts.
   not embed credentials. Passwords are never stored: `auth_env_var` (default
   `AURA_PASSWORD`) names the environment variable read at runtime.
 - `GET /projects/{id}/connections/aura`, `DELETE .../aura/{conn_id}`.
+  The list also includes the `.env` connection when `AURA_URI` plus a
+  resolvable `AURA_PASSWORD` are set (stable id derived from the URI; see
+  `docs/secrets.md`). It cannot be deleted; unset `AURA_URI` to hide it.
 - `POST .../aura/{conn_id}/test` — fresh TCP+TLS+Bolt handshake with auth;
   returns reachability, server agent, and Bolt version. Unreachable targets
   yield `502 AURA_UNREACHABLE`, bad credentials `502 AURA_AUTH_FAILED`.
+  Accepts stored ids and the `.env` connection id alike.
 
 ## Workflow (approval-gated)
 

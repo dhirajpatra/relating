@@ -1,4 +1,4 @@
-export type AiProviderType = 'mock' | 'openai' | 'ollama' | 'anthropic';
+export type AiProviderType = 'mock' | 'openai' | 'ollama' | 'anthropic' | 'meta_api';
 
 export interface AiProviderConfig {
   provider_type: AiProviderType;
