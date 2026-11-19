@@ -1,19 +1,189 @@
+# Relating — full stack.
+#
+#   docker compose up --build            # server + postgres + ollama (+ db-init job)
+#   docker compose --profile neo4j up    # ... plus a local Neo4j for migration testing
+#
+# Workbench:  http://127.0.0.1:${RELATING_PORT:-8080}
+# API health:  http://127.0.0.1:${RELATING_PORT:-8080}/api/v1/health
+# Ollama API:  http://127.0.0.1:${OLLAMA_PORT:-11434}   (in-compose: http://ollama:11434)
+# Neo4j:       bolt://127.0.0.1:${NEO4J_BOLT_PORT:-7687} + http://127.0.0.1:${NEO4J_HTTP_PORT:-7474}
+#
+# Every service builds from its own folder under docker/ (one folder +
+# Dockerfile each). Tunables live in .env (see .env.example); all of them
+# have working defaults here so a bare `docker compose up` just works.
+# See docs/docker.md for the full runbook.
+
 services:
-  relating-server:
+  server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/server/Dockerfile
+    image: relating-server:latest
+    container_name: relating-server
     ports:
-      - "8080:8080"
+      - "${RELATING_PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - RELATING_PORT=8080
-      - RELATING_HOST=0.0.0.0
-      - RELATING_DATA_DIR=/app/data
-      - RELATING_DATABASE_URL=sqlite:///app/data/relating_metadata.db
-      - RELATING_LOG_LEVEL=info
+      # Container-correct values win over .env (which describes a laptop).
+      RELATING_PORT: 8080
+      RELATING_HOST: 0.0.0.0
+      RELATING_DATA_DIR: /app/data
+      # SQLite stays the runtime metadata store; Postgres is provisioned by
+      # the db-init job for team workflows (see docs/postgres.md).
+      RELATING_DATABASE_URL: sqlite:///app/data/relating_metadata.db
+      RELATING_LOG_LEVEL: ${RELATING_LOG_LEVEL:-info}
+      RELATING_MCP_TOKEN: ${RELATING_MCP_TOKEN:-}
+      # Pinned: containers have no OS keychain, so `keyring` from a laptop
+      # .env would break secret resolution here. `auto` reads $AURA_PASSWORD
+      # (above) and *_FILE sidecars instead.
+      RELATING_SECRET_BACKEND: auto
+      AURA_PASSWORD: ${AURA_PASSWORD:-}
     volumes:
       - relating-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - relating-net
     restart: unless-stopped
+
+  # One-shot provisioning job (same image as server): runs the sanctioned
+  # `relating db init-postgres` + `db check-postgres` against the postgres
+  # service. Idempotent — safe on every `docker compose up`.
+  db-init:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    image: relating-server:latest
+    container_name: relating-db-init
+    command: ["db-init"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      RELATING_POSTGRES_URL: postgres://${POSTGRES_USER:-relating}:${POSTGRES_PASSWORD:-relating}@postgres:5432/${POSTGRES_DB:-relating}
+      DB_INIT_ATTEMPTS: ${DB_INIT_ATTEMPTS:-30}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - relating-net
+    restart: "no"
+
+  postgres:
+    build:
+      context: docker/postgres
+      dockerfile: Dockerfile
+    image: relating-postgres:latest
+    container_name: relating-postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-relating}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-relating}
+      POSTGRES_DB: ${POSTGRES_DB:-relating}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-relating} -d $${POSTGRES_DB:-relating}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - relating-net
+    restart: unless-stopped
+
+  ollama:
+    build:
+      context: docker/ollama
+      dockerfile: Dockerfile
+    image: relating-ollama:latest
+    container_name: relating-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # NB: `-` (not `:-`) so that an explicitly empty value skips pulling.
+      OLLAMA_PRELOAD_MODELS: ${OLLAMA_PRELOAD_MODELS-llama3.1 nomic-embed-text}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - relating-net
+    restart: unless-stopped
+    # Uncomment for NVIDIA GPU acceleration (requires the NVIDIA container
+    # toolkit on the host). CPU-only works out of the box.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Optional local Bolt target for testing the Aura migration workflow
+  # without a cloud Aura account. Off by default:
+  #   docker compose --profile neo4j up
+  neo4j:
+    build:
+      context: docker/neo4j
+      dockerfile: Dockerfile
+    image: relating-neo4j:latest
+    container_name: relating-neo4j
+    profiles: ["neo4j"]
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-relating-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-relating-neo4j}
+      NEO4J_dbms_default__database: ${NEO4J_DATABASE:-neo4j}
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_PASSWORD:-relating-neo4j}\" 'RETURN 1 AS ok'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    networks:
+      - relating-net
+    restart: unless-stopped
+
+networks:
+  relating-net:
+    driver: bridge
 
 volumes:
   relating-data:
+  pgdata:
+  ollama-data:
+  neo4j-data:
+  neo4j-logs:

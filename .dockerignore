@@ -1,0 +1,18 @@
+# Keep the server build context small and secret-free.
+.git
+.github
+target
+debug
+**/*.rs.bk
+**/mutants.out*/
+node_modules
+web/dist
+web/node_modules
+data
+*.db
+.env
+!.env.example
+*.pdf
+*.mp4
+docs/videos
+docs/images

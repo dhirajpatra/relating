@@ -205,10 +205,12 @@ rm -rf ./data
 ```bash
 docker compose up --build
 # workbench at http://127.0.0.1:8080, data in the relating-data volume
+# team Postgres on 5432, Ollama AI on 11434 (see docs/docker.md)
 ```
 
-Note: the compose file pins its own environment values, so `.env` is not
-picked up there — edit `docker-compose.yml` to change ports or secrets.
+The compose file reads `.env` for ports, passwords, and models (all have
+working defaults, so `.env` is optional). The server container itself
+always runs on SQLite; Postgres holds the provisioned team schema.
 
 ## 9. Troubleshooting
 

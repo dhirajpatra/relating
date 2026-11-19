@@ -23,7 +23,7 @@ Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ wit
 
 Then open http://127.0.0.1:8080 in your browser to use the workbench.
 
-The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `docker compose up --build`.
+The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `docker compose up --build` for the full stack (server + team Postgres + local Ollama AI, each with its own `Dockerfile` under `docker/` — see [docs/docker.md](docs/docker.md)).
 
 > The built-in mock AI provider is for **development and testing only** — it returns
 > deterministic canned responses and is never production AI functionality. Configure
@@ -465,6 +465,11 @@ relating/
 ├── docs/api/                # per-area API contracts
 ├── .github/workflows/       # relating.yml CI gates
 ├── start.sh                 # one-command local start
+├── docker/                  # one folder + Dockerfile per compose service
+│   ├── server/              # API + workbench UI + MCP (also used by db-init)
+│   ├── postgres/            # team Postgres 17
+│   ├── ollama/              # local AI backend with model preload
+│   └── neo4j/               # opt-in local Bolt target (--profile neo4j)
 ├── Cargo.toml
 ├── README.md
 ├── SKILL.md
