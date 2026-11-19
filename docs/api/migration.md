@@ -18,8 +18,11 @@ Portability Compiler (R3); R1 migrates data, schema objects, and contracts.
 
 ## Workflow (approval-gated)
 
-1. `POST /projects/{id}/migrations/analyze` — `{connection_id?}`. Stateless:
-   source findings plus target findings (or an honest unreachable note).
+1. `POST /projects/{id}/migrations/analyze` — `{connection_id?, aura_tier?}`.
+   Stateless: source findings plus target findings (or an honest unreachable
+   note). `aura_tier` (preset id, `<N>gb`, `<N>mb`, `custom:<mb>`) enables
+   per-tier vector RAM checks; without it, dimensions are still checked and
+   RAM fit is reported as needing a tier.
 2. `POST /projects/{id}/migrations/plan` — `{connection_id, batch_size?}`.
    Creates a migration (`planned`) with per-label/type batches, generated
    unique-constraint DDL, and an embedded dry-run.
@@ -34,6 +37,35 @@ Portability Compiler (R3); R1 migrates data, schema objects, and contracts.
 6. `POST .../{mid}/verify` — per-label/type counts plus property sampling
    (subset semantics); sets `verified` only when everything matches.
 7. `GET .../migrations`, `GET .../{mid}`, `GET .../{mid}/report` (manifest).
+
+## Write mode (disclosed, not implied)
+
+Every plan declares `write_mode: "merge_upsert"`, `destructive: false`, and a
+`write_semantics` sentence. Execution runs idempotent `MERGE` upserts on
+stable `uid` keys: it appends new nodes/relationships and updates matched
+properties, and never deletes target data or wipes the instance. Delta pushes
+(migrate, add local documents, migrate again) transfer only new/changed
+records. No overwrite/full-refresh mode exists in this release, so an approved
+migration cannot clobber live Aura data. The UI shows this banner on every
+migration before Approve/Execute.
+
+## Vector index fit (checked before batch writes)
+
+Neo4j vector indexes require 1–4096 dimensions and a single vector per index.
+Analysis reports `vector_index_fit` findings per embedding profile:
+
+- Dimensions outside 1–4096 are `UNSUPPORTED` and become dry-run **blockers**,
+  so approval is refused instead of failing mid-transfer on Aura.
+- With `aura_tier`, estimated float32 vector bytes are checked against a
+  conservative 25% of tier RAM: fits are `SUPPORTED`, tight fits need manual
+  review, over-budget loads are `UNSUPPORTED` with remediation (larger tier,
+  fewer vectors, smaller model).
+- Multiple profiles get one `TRANSFORM` note: plan one `CREATE VECTOR INDEX`
+  per profile on its own label/property.
+
+Tier RAM figures are documented estimates — confirm against the Aura console
+and measure index builds on staging. The Performance Advisor (R6) runs the
+same checks headlessly via `vectors` + `aura_tier` (see `advisor.md`).
 
 ## Limits (stated, not silent)
 

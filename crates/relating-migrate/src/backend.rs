@@ -14,6 +14,14 @@ pub struct TargetInfo {
     pub database: Option<String>,
 }
 
+/// Column-named result rows for proxy mode: the same Cypher text returns the
+/// same shaped result whether it runs on the local Relate store or on Aura.
+#[derive(Debug, Clone, Default)]
+pub struct QueryRecords {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<BoltValue>>,
+}
+
 #[async_trait]
 pub trait Neo4jBackend: Send + Sync {
     async fn test_connection(&self) -> Result<TargetInfo, MigrateError>;
@@ -28,6 +36,13 @@ pub trait Neo4jBackend: Send + Sync {
         query: &str,
         params: BTreeMap<String, BoltValue>,
     ) -> Result<BTreeMap<String, BoltValue>, MigrateError>;
+    /// RUN + PULL with column names, used by proxy mode so Aura results match
+    /// the local result shape. Existing `run_read` callers are unaffected.
+    async fn run_query(
+        &self,
+        query: &str,
+        params: BTreeMap<String, BoltValue>,
+    ) -> Result<QueryRecords, MigrateError>;
 }
 
 pub struct BoltBackend {
@@ -123,6 +138,28 @@ impl Neo4jBackend for BoltBackend {
         }
         result
     }
+
+    async fn run_query(
+        &self,
+        query: &str,
+        params: BTreeMap<String, BoltValue>,
+    ) -> Result<QueryRecords, MigrateError> {
+        let mut guard = self.client.lock().await;
+        self.ensure_connected(&mut guard).await?;
+        let result = guard
+            .as_mut()
+            .expect("client just connected")
+            .run_records_with_fields(query, params)
+            .await
+            .map(|(columns, rows, _)| QueryRecords { columns, rows });
+        if matches!(
+            result,
+            Err(MigrateError::Connection(_)) | Err(MigrateError::Protocol(_))
+        ) {
+            Self::drop_poisoned(&mut guard);
+        }
+        result
+    }
 }
 
 #[derive(Debug, Default)]
@@ -131,6 +168,7 @@ struct MockState {
     node_uids: HashMap<String, std::collections::HashSet<String>>,
     rel_counts: HashMap<String, u64>,
     scripted_reads: HashMap<String, Vec<Vec<BoltValue>>>,
+    scripted_columns: HashMap<String, Vec<String>>,
 }
 
 /// In-memory backend for tests: records writes and answers count queries
@@ -153,6 +191,13 @@ impl MockNeo4jBackend {
         state
             .scripted_reads
             .insert(query_contains.to_string(), rows);
+    }
+
+    pub async fn script_columns(&self, query_contains: &str, columns: Vec<String>) {
+        let mut state = self.state.lock().await;
+        state
+            .scripted_columns
+            .insert(query_contains.to_string(), columns);
     }
 
     pub async fn write_count(&self) -> usize {
@@ -316,6 +361,29 @@ impl Neo4jBackend for MockNeo4jBackend {
         let mut meta = BTreeMap::new();
         meta.insert("stats".to_string(), BoltValue::Map(stats));
         Ok(meta)
+    }
+
+    async fn run_query(
+        &self,
+        query: &str,
+        params: BTreeMap<String, BoltValue>,
+    ) -> Result<QueryRecords, MigrateError> {
+        let rows = self.run_read(query, params).await?;
+        let state = self.state.lock().await;
+        for (needle, columns) in &state.scripted_columns {
+            if query.contains(needle) {
+                return Ok(QueryRecords {
+                    columns: columns.clone(),
+                    rows,
+                });
+            }
+        }
+        // No scripted names: synthesize positional columns from the row width.
+        let width = rows.first().map(|r| r.len()).unwrap_or(0);
+        Ok(QueryRecords {
+            columns: (0..width).map(|i| format!("col_{}", i)).collect(),
+            rows,
+        })
     }
 }
 

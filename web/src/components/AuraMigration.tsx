@@ -101,6 +101,7 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
   const [testingId, setTestingId] = useState<string | null>(null);
 
   const [selectedConnId, setSelectedConnId] = useState<string>('');
+  const [auraTier, setAuraTier] = useState<string>('free');
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -202,7 +203,7 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
     setAnalysisError(null);
     setAnalysis(null);
     try {
-      const res = await api.analyzeMigration(projectId, selectedConnId || undefined);
+      const res = await api.analyzeMigration(projectId, selectedConnId || undefined, auraTier || undefined);
       setAnalysis(res);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -544,7 +545,32 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
         <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem' }}>
           Compatibility Analysis
         </h3>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+          Vector indexes are checked against the target tier (Neo4j allows 1–4096 dimensions,
+          one vector per index) before any batch write. RAM figures are estimates — confirm in
+          the Aura console.
+        </p>
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <select
+            value={auraTier}
+            onChange={(e) => setAuraTier(e.target.value)}
+            title="Target Aura tier for vector RAM checks"
+            style={{
+              padding: '0.5rem 0.7rem',
+              backgroundColor: 'var(--bg-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
+              color: 'var(--text-primary)',
+              fontSize: '0.85rem',
+            }}
+          >
+            <option value="">No tier (dimensions only)</option>
+            <option value="free">AuraDB Free (~1 GB)</option>
+            <option value="professional-2gb">Professional 2 GB</option>
+            <option value="professional-4gb">Professional 4 GB</option>
+            <option value="professional-8gb">Professional 8 GB</option>
+            <option value="dedicated-16gb">Dedicated 16 GB+</option>
+          </select>
           <select
             value={selectedConnId}
             onChange={(e) => setSelectedConnId(e.target.value)}
@@ -697,6 +723,23 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
           <div>
             <div
               style={{
+                padding: '0.6rem 0.8rem',
+                backgroundColor: 'rgba(16, 185, 129, 0.08)',
+                border: '1px solid var(--success)',
+                borderRadius: '6px',
+                fontSize: '0.78rem',
+                color: 'var(--text-secondary)',
+                marginBottom: '0.6rem',
+              }}
+            >
+              <strong style={{ color: 'var(--success)' }}>Write mode: MERGE upsert (non-destructive).</strong>{' '}
+              {selectedMigration.plan.write_semantics ||
+                'Appends new records and updates matched properties; never deletes or overwrites unrelated target data.'}{' '}
+              Delta-friendly: re-running after adding local documents only transfers new/changed records.
+              No overwrite/full-refresh mode exists in this release.
+            </div>
+            <div
+              style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
@@ -798,7 +841,7 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
                 title={
                   selectedMigration.status !== 'approved'
                     ? 'Approve the migration first'
-                    : 'Execute the approved migration'
+                    : 'Execute the approved migration (MERGE upsert: appends/updates, never deletes target data)'
                 }
                 style={{
                   backgroundColor: 'rgba(239, 68, 68, 0.15)',

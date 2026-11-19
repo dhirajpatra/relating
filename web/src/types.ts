@@ -55,6 +55,20 @@ export interface GraphQueryResult {
   row_count: number;
 }
 
+export interface QueryTargetInfo {
+  backend: 'relate' | 'aura';
+  connection_string: string;
+  connection_id?: string;
+  name?: string;
+}
+
+export interface QueryTargetsResponse {
+  project_id: string;
+  local: QueryTargetInfo;
+  aura: QueryTargetInfo[];
+  usage: string;
+}
+
 export interface AiHealthReport {
   healthy: boolean;
   provider: string;
@@ -333,6 +347,12 @@ export interface MigrationPlan {
   total_nodes: number;
   total_relationships: number;
   total_batches: number;
+  /** Write mode id; always 'merge_upsert' (optional: plans stored by older releases omit it). */
+  write_mode?: string;
+  /** Human-readable statement of what execution does to target data. */
+  write_semantics?: string;
+  /** Whether execution can delete target data; always false in this release. */
+  destructive?: boolean;
 }
 
 export interface DryRunReport {
@@ -805,6 +825,33 @@ export interface SizingEstimate {
   estimated_storage_mb: number;
   assumptions: string[];
   caveats: string[];
+  vectors?: VectorSizing;
+}
+
+export interface VectorFit {
+  profile_name: string;
+  dimensions: number;
+  vector_count: number;
+  estimated_bytes: number;
+  estimated_mb: number;
+  tier_id?: string;
+  budget_bytes?: number;
+  verdict: CapabilityVerdict;
+  detail: string;
+  remediation?: string;
+}
+
+export interface VectorSizing {
+  tier_id?: string;
+  total_vector_bytes: number;
+  total_vector_mb: number;
+  fits: VectorFit[];
+}
+
+export interface VectorSizingInput {
+  profile_name?: string;
+  dimensions: number;
+  vector_count: number;
 }
 
 export interface PlanMeasurement {

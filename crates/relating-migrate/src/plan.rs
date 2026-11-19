@@ -22,6 +22,24 @@ pub struct BatchPlan {
     pub batch_count: usize,
 }
 
+/// How an approved migration writes to Aura. There is exactly one mode:
+/// idempotent MERGE upserts keyed by stable business keys (`uid`). The
+/// migration appends new nodes/relationships and updates matched properties;
+/// it never deletes target data and never wipes the instance. Delta pushes
+/// (migrate, add local documents, migrate again) only transfer new/changed
+/// records. A destructive full-refresh mode does not exist in this release.
+pub const WRITE_MODE_MERGE_UPSERT: &str = "merge_upsert";
+
+pub const WRITE_SEMANTICS_MERGE_UPSERT: &str = "MERGE upsert by stable uid keys: appends new records and updates matched properties; never deletes or overwrites unrelated target data.";
+
+fn default_write_mode() -> String {
+    WRITE_MODE_MERGE_UPSERT.to_string()
+}
+
+fn default_write_semantics() -> String {
+    WRITE_SEMANTICS_MERGE_UPSERT.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationPlan {
     pub node_batches: Vec<BatchPlan>,
@@ -31,6 +49,17 @@ pub struct MigrationPlan {
     pub total_nodes: u64,
     pub total_relationships: u64,
     pub total_batches: usize,
+    /// Write mode id. Always `merge_upsert` today; defaults keep plans
+    /// stored by older releases deserializing identically.
+    #[serde(default = "default_write_mode")]
+    pub write_mode: String,
+    /// Human-readable statement of what execution does to target data.
+    #[serde(default = "default_write_semantics")]
+    pub write_semantics: String,
+    /// Whether execution can delete target data. Always false: there is no
+    /// overwrite/full-refresh mode in this release.
+    #[serde(default)]
+    pub destructive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +190,9 @@ pub fn build_plan(
         total_nodes,
         total_relationships,
         total_batches,
+        write_mode: default_write_mode(),
+        write_semantics: default_write_semantics(),
+        destructive: false,
     })
 }
 
@@ -240,6 +272,36 @@ mod tests {
     #[test]
     fn test_build_plan_rejects_zero_batch() {
         assert!(build_plan(&[], &[], None, None, 0).is_err());
+    }
+
+    #[test]
+    fn test_plan_declares_merge_upsert_semantics() {
+        let plan = build_plan(
+            &[("Person".to_string(), 10)],
+            &[],
+            None,
+            Some("Neo4j/5.18.0"),
+            500,
+        )
+        .unwrap();
+        assert_eq!(plan.write_mode, WRITE_MODE_MERGE_UPSERT);
+        assert!(!plan.destructive);
+        assert!(plan.write_semantics.contains("never deletes"));
+
+        // Plans stored by older releases (without the new fields) read back
+        // with the same semantics instead of failing to deserialize.
+        let legacy = serde_json::json!({
+            "node_batches": [],
+            "rel_batches": [],
+            "ddl_statements": [],
+            "warnings": [],
+            "total_nodes": 0,
+            "total_relationships": 0,
+            "total_batches": 0
+        });
+        let back: MigrationPlan = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.write_mode, WRITE_MODE_MERGE_UPSERT);
+        assert!(!back.destructive);
     }
 
     #[test]

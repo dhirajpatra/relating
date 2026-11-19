@@ -6,6 +6,7 @@ pub mod structure;
 pub use error::AdvisorError;
 pub use queries::{analyze_query, QueryFinding, Severity};
 pub use sizing::{
-    estimate_sizing, measure_target, PlanMeasurement, SizingEstimate, TargetMeasurements,
+    estimate_sizing, estimate_sizing_with_vectors, measure_target, PlanMeasurement, SizingEstimate,
+    TargetMeasurements, VectorSizing, VectorSizingInput,
 };
 pub use structure::{analyze_structure, StructureNote};

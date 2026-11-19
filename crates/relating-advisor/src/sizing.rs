@@ -1,4 +1,7 @@
-use relating_migrate::Neo4jBackend;
+use relating_migrate::{
+    assess_workloads, estimate_vector_bytes, format_mb, AuraTier, Neo4jBackend, VectorFit,
+    VectorWorkload,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -9,6 +12,33 @@ pub struct SizingEstimate {
     pub estimated_storage_mb: f64,
     pub assumptions: Vec<String>,
     pub caveats: Vec<String>,
+    /// Present only when the request supplied a vector workload: per-profile
+    /// dimension and tier-RAM fit plus the vector bytes folded into
+    /// `estimated_storage_mb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectors: Option<VectorSizing>,
+}
+
+/// One embedding profile's vector load for sizing input.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorSizingInput {
+    #[serde(default = "default_vector_profile_name")]
+    pub profile_name: String,
+    pub dimensions: usize,
+    pub vector_count: u64,
+}
+
+fn default_vector_profile_name() -> String {
+    "default".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorSizing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_id: Option<String>,
+    pub total_vector_bytes: u64,
+    pub total_vector_mb: f64,
+    pub fits: Vec<VectorFit>,
 }
 
 /// Rough Aura sizing guidance. This is an ESTIMATE from element counts with
@@ -50,7 +80,59 @@ pub fn estimate_sizing(node_count: u64, rel_count: u64) -> SizingEstimate {
             "Aura pricing and tiers change; confirm against current Neo4j documentation"
                 .to_string(),
         ],
+        vectors: None,
     }
+}
+
+/// Vector-aware sizing: folds raw vector bytes into storage and checks every
+/// profile's dimensions plus tier-RAM fit, so oversized embeddings are caught
+/// before batch writes instead of failing mid-transfer on Aura.
+pub fn estimate_sizing_with_vectors(
+    node_count: u64,
+    rel_count: u64,
+    vectors: &[VectorSizingInput],
+    tier: Option<&AuraTier>,
+) -> SizingEstimate {
+    let mut estimate = estimate_sizing(node_count, rel_count);
+    if vectors.is_empty() {
+        return estimate;
+    }
+    let workloads: Vec<VectorWorkload> = vectors
+        .iter()
+        .map(|v| VectorWorkload {
+            profile_name: v.profile_name.clone(),
+            dimensions: v.dimensions,
+            vector_count: v.vector_count,
+        })
+        .collect();
+    let fits = assess_workloads(&workloads, tier);
+    let total_vector_bytes: u64 = vectors
+        .iter()
+        .map(|v| estimate_vector_bytes(v.vector_count, v.dimensions))
+        .fold(0u64, |acc, b| acc.saturating_add(b));
+
+    estimate.estimated_storage_mb =
+        ((estimate.estimated_storage_mb + format_mb(total_vector_bytes)) * 10.0).round() / 10.0;
+    estimate
+        .assumptions
+        .retain(|a| !a.starts_with("Vector embeddings and full-text indexes are excluded"));
+    estimate.assumptions.push(format!(
+        "Includes ~{} MB of raw float32 vector bytes across {} profile(s); HNSW index overhead is extra",
+        format_mb(total_vector_bytes),
+        vectors.len()
+    ));
+    if tier.is_none() {
+        estimate.caveats.push(
+            "No Aura tier given: vector RAM fit is unverified; re-run with aura_tier".to_string(),
+        );
+    }
+    estimate.vectors = Some(VectorSizing {
+        tier_id: tier.map(|t| t.id.clone()),
+        total_vector_bytes,
+        total_vector_mb: format_mb(total_vector_bytes),
+        fits,
+    });
+    estimate
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,9 +214,52 @@ mod tests {
         assert!(small.tier_hint.contains("Smallest"));
         assert!(!small.assumptions.is_empty());
         assert!(!small.caveats.is_empty());
+        assert!(small.vectors.is_none());
         let large = estimate_sizing(5_000_000, 8_000_000);
         assert!(large.tier_hint.contains("Large graph"));
         assert!(large.estimated_storage_mb > small.estimated_storage_mb);
+    }
+
+    #[test]
+    fn test_vector_sizing_folds_bytes_and_flags_fit() {
+        use relating_migrate::parse_tier;
+        let tier = parse_tier("free").unwrap();
+        let with_vectors = estimate_sizing_with_vectors(
+            100,
+            50,
+            &[VectorSizingInput {
+                profile_name: "docs".to_string(),
+                dimensions: 768,
+                vector_count: 10_000,
+            }],
+            Some(&tier),
+        );
+        let vectors = with_vectors.vectors.as_ref().unwrap();
+        assert_eq!(vectors.total_vector_bytes, 10_000 * 768 * 4);
+        assert_eq!(vectors.fits.len(), 1);
+        assert_eq!(
+            vectors.fits[0].verdict,
+            relating_migrate::CapabilityVerdict::Supported
+        );
+        assert!(with_vectors.estimated_storage_mb > estimate_sizing(100, 50).estimated_storage_mb);
+
+        // Oversized dimensions are flagged even without a tier.
+        let bad = estimate_sizing_with_vectors(
+            100,
+            50,
+            &[VectorSizingInput {
+                profile_name: "big".to_string(),
+                dimensions: 8192,
+                vector_count: 10,
+            }],
+            None,
+        );
+        let vectors = bad.vectors.as_ref().unwrap();
+        assert_eq!(
+            vectors.fits[0].verdict,
+            relating_migrate::CapabilityVerdict::Unsupported
+        );
+        assert!(bad.caveats.iter().any(|c| c.contains("aura_tier")));
     }
 
     #[tokio::test]

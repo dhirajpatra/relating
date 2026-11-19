@@ -30,6 +30,7 @@ import {
   PortableReport,
   ProjectDetail,
   ProjectSummary,
+  QueryTargetsResponse,
   QuestionAnswer,
   RunTestsResponse,
   RetrievalConfigResponse,
@@ -40,6 +41,7 @@ import {
   ShadowRunResponse,
   Source,
   SystemHealth,
+  VectorSizingInput,
   VerificationReport,
 } from '../types';
 
@@ -95,20 +97,45 @@ export const api = {
       method: 'POST',
     }),
 
-  runCypherRead: (id: string, query: string, params?: Record<string, unknown>, limit?: number) =>
+  runCypherRead: (
+    id: string,
+    query: string,
+    params?: Record<string, unknown>,
+    limit?: number,
+    connectionId?: string
+  ) =>
     request<GraphQueryResult>(`/projects/${id}/cypher/read`, {
       method: 'POST',
-      body: JSON.stringify({ query, params: params || {}, limit }),
+      body: JSON.stringify({
+        query,
+        params: params || {},
+        limit,
+        connection_id: connectionId || undefined,
+      }),
     }),
 
-  runCypherWrite: (id: string, query: string, params?: Record<string, unknown>) =>
+  runCypherWrite: (
+    id: string,
+    query: string,
+    params?: Record<string, unknown>,
+    connectionId?: string,
+    confirmRemoteWrite?: boolean
+  ) =>
     request<{ nodes_created: number; relationships_created: number; elapsed_ms: number }>(
       `/projects/${id}/cypher/write`,
       {
         method: 'POST',
-        body: JSON.stringify({ query, params: params || {} }),
+        body: JSON.stringify({
+          query,
+          params: params || {},
+          connection_id: connectionId || undefined,
+          confirm_remote_write: confirmRemoteWrite || undefined,
+        }),
       }
     ),
+
+  listQueryTargets: (projectId: string) =>
+    request<QueryTargetsResponse>(`/projects/${projectId}/query-targets`),
 
   // Slice 2 API endpoints
   listSources: (projectId: string) =>
@@ -120,6 +147,22 @@ export const api = {
       body: JSON.stringify({
         filename,
         content,
+        content_type: contentType,
+      }),
+    }),
+
+  registerBinarySource: (
+    projectId: string,
+    filename: string,
+    contentBase64: string,
+    contentType?: string
+  ) =>
+    request<Source>(`/projects/${projectId}/sources`, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename,
+        content: '',
+        content_base64: contentBase64,
         content_type: contentType,
       }),
     }),
@@ -228,10 +271,10 @@ export const api = {
       { method: 'POST' }
     ),
 
-  analyzeMigration: (projectId: string, connectionId?: string) =>
+  analyzeMigration: (projectId: string, connectionId?: string, auraTier?: string) =>
     request<AnalyzeResponse>(`/projects/${projectId}/migrations/analyze`, {
       method: 'POST',
-      body: JSON.stringify({ connection_id: connectionId }),
+      body: JSON.stringify({ connection_id: connectionId, aura_tier: auraTier || undefined }),
     }),
 
   planMigration: (projectId: string, connectionId: string, batchSize?: number) =>
@@ -379,10 +422,18 @@ export const api = {
     projectId: string,
     queries: { name: string; cypher: string }[],
     connectionId?: string,
-    measure?: boolean
+    measure?: boolean,
+    vectors?: VectorSizingInput[],
+    auraTier?: string
   ) =>
     request<AdvisorResponse>(`/projects/${projectId}/advisor/analyze`, {
       method: 'POST',
-      body: JSON.stringify({ queries, connection_id: connectionId, measure }),
+      body: JSON.stringify({
+        queries,
+        connection_id: connectionId,
+        measure,
+        vectors: vectors && vectors.length > 0 ? vectors : undefined,
+        aura_tier: auraTier || undefined,
+      }),
     }),
 };

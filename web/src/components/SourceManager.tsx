@@ -17,6 +17,18 @@ export const SourceManager: React.FC<SourceManagerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const readFileAsBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = reader.result as string;
+        const comma = url.indexOf(',');
+        resolve(comma >= 0 ? url.slice(comma + 1) : url);
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -25,8 +37,17 @@ export const SourceManager: React.FC<SourceManagerProps> = ({
     setError(null);
 
     try {
-      const text = await file.text();
-      await api.registerSource(projectId, file.name, text, file.type || undefined);
+      // Binary documents must travel as base64 so no byte is mangled by text decoding.
+      const lower = file.name.toLowerCase();
+      const isBinary =
+        lower.endsWith('.pdf') || lower.endsWith('.docx') || lower.endsWith('.doc');
+      if (isBinary) {
+        const base64 = await readFileAsBase64(file);
+        await api.registerBinarySource(projectId, file.name, base64, file.type || undefined);
+      } else {
+        const text = await file.text();
+        await api.registerSource(projectId, file.name, text, file.type || undefined);
+      }
       if (fileInputRef.current) fileInputRef.current.value = '';
       onSourcesChanged();
     } catch (err: unknown) {
@@ -78,7 +99,8 @@ export const SourceManager: React.FC<SourceManagerProps> = ({
         <div>
           <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Registered Data Sources</h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Upload CSV, JSON, or text documents. Content hashes and table lineage are tracked automatically.
+            Upload CSV, JSON, text, PDF, or DOCX documents. Content hashes and source
+            lineage (including PDF pages and DOCX sections) are tracked automatically.
           </p>
         </div>
 
@@ -105,7 +127,7 @@ export const SourceManager: React.FC<SourceManagerProps> = ({
             type="file"
             onChange={handleFileUpload}
             style={{ display: 'none' }}
-            accept=".csv,.json,.txt,.md,.doc,.docx"
+            accept=".csv,.json,.txt,.md,.pdf,.docx,.doc"
           />
           <button
             type="button"

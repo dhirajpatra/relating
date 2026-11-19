@@ -218,3 +218,65 @@ async fn test_advisor_static_and_measured() {
 
     server.abort();
 }
+
+#[tokio::test]
+async fn test_advisor_vector_sizing_checks_tier_fit() {
+    let (app, _dir) = setup_test_app().await;
+    let pid = create_project(&app).await;
+
+    // Without vectors the sizing shape is unchanged (no vectors section).
+    let (status, report) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/advisor/analyze", pid),
+        json!({"queries": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(report["sizing"].get("vectors").is_none());
+
+    // With vectors the advisor folds bytes into storage and checks fit.
+    let (status, report) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/advisor/analyze", pid),
+        json!({
+            "queries": [],
+            "vectors": [{"profile_name": "docs", "dimensions": 768, "vector_count": 10000}],
+            "aura_tier": "free"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report["sizing"]["vectors"]["tier_id"], "free");
+    assert_eq!(
+        report["sizing"]["vectors"]["total_vector_bytes"],
+        10_000 * 768 * 4
+    );
+    assert_eq!(report["sizing"]["vectors"]["fits"][0]["verdict"], "SUPPORTED");
+
+    // Oversized dimensions are flagged without needing a tier.
+    let (status, report) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/advisor/analyze", pid),
+        json!({
+            "queries": [],
+            "vectors": [{"dimensions": 8192, "vector_count": 10}]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report["sizing"]["vectors"]["fits"][0]["verdict"], "UNSUPPORTED");
+
+    // Unknown tiers are rejected with the valid choices.
+    let (status, err) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/advisor/analyze", pid),
+        json!({
+            "queries": [],
+            "vectors": [{"dimensions": 128, "vector_count": 10}],
+            "aura_tier": "mystery-tier"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(err["error"]["message"].as_str().unwrap().contains("mystery-tier"));
+}

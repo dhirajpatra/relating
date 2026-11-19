@@ -25,9 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(8080);
 
     let host = std::env::var("RELATING_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let data_dir = PathBuf::from(
-        std::env::var("RELATING_DATA_DIR").unwrap_or_else(|_| "./data".to_string()),
-    );
+    let data_dir =
+        PathBuf::from(std::env::var("RELATING_DATA_DIR").unwrap_or_else(|_| "./data".to_string()));
     let db_url = std::env::var("RELATING_DATABASE_URL")
         .unwrap_or_else(|_| format!("sqlite://{}/relating_metadata.db", data_dir.display()));
 
@@ -36,7 +35,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&data_dir)?;
     }
 
-    // 3. Initialize SQLite metadata store and run migrations
+    // 3. Initialize the metadata store (SQLite runtime default) and run migrations.
+    if relating_metadata::db_url_kind(&db_url) == "postgres" {
+        return Err(
+            "RELATING_DATABASE_URL points at PostgreSQL, which is provisioning-only in this release: \
+             SQLite remains the runtime metadata store. Provision and validate the shared schema with \
+             `cargo run -p relating-cli --features postgres -- db init-postgres --url <pg-url>` \
+             (see docs/postgres.md), then keep the server on SQLite for now."
+                .into(),
+        );
+    }
     info!("Connecting to metadata database: {}", db_url);
     let pool = init_db(&db_url).await?;
 

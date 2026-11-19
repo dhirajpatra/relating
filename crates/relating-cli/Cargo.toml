@@ -30,3 +30,8 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[features]
+default = []
+os-keychain = ["relating-core/os-keychain"]
+postgres = ["relating-metadata/postgres"]

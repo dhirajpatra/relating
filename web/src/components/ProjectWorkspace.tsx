@@ -5,6 +5,7 @@ import {
   GraphQueryResult,
   OntologyStatusResponse,
   ProjectDetail,
+  QueryTargetsResponse,
   Source,
 } from '../types';
 import { AuraMigration } from './AuraMigration';
@@ -36,6 +37,10 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
   const [queryRunning, setQueryRunning] = useState(false);
   const [queryResult, setQueryResult] = useState<GraphQueryResult | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
+  // Backend flip: '' runs on the local Relate store; otherwise an Aura connection id.
+  const [queryTargets, setQueryTargets] = useState<QueryTargetsResponse | null>(null);
+  const [queryTarget, setQueryTarget] = useState('');
+  const [confirmRemoteWrite, setConfirmRemoteWrite] = useState(false);
 
   // AI test state
   const [aiTesting, setAiTesting] = useState(false);
@@ -68,6 +73,13 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
     fetchWorkspaceData();
   }, [projectId]);
 
+  useEffect(() => {
+    if (activeTab !== 'cypher' || queryTargets) return;
+    api.listQueryTargets(projectId).then(setQueryTargets).catch(() => {
+      // Target listing is additive; the console still works against local.
+    });
+  }, [activeTab, projectId]);
+
   const handleRunQuery = async (isWrite: boolean) => {
     if (!query.trim()) return;
     setQueryRunning(true);
@@ -76,7 +88,13 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
 
     try {
       if (isWrite) {
-        const writeRes = await api.runCypherWrite(projectId, query);
+        const writeRes = await api.runCypherWrite(
+          projectId,
+          query,
+          undefined,
+          queryTarget || undefined,
+          queryTarget ? confirmRemoteWrite : undefined
+        );
         setQueryResult({
           columns: ['Nodes Created', 'Relationships Created', 'Time (ms)'],
           rows: [
@@ -89,11 +107,13 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
           elapsed_ms: writeRes.elapsed_ms,
           row_count: 1,
         });
-        // Refresh project data
-        const updated = await api.getProject(projectId);
-        setDetail(updated);
+        // Refresh project data for local writes; remote writes leave the local store untouched.
+        if (!queryTarget) {
+          const updated = await api.getProject(projectId);
+          setDetail(updated);
+        }
       } else {
-        const res = await api.runCypherRead(projectId, query);
+        const res = await api.runCypherRead(projectId, query, undefined, undefined, queryTarget || undefined);
         setQueryResult(res);
       }
     } catch (err: unknown) {
@@ -371,6 +391,47 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
                 </button>
               </div>
             </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                Target:
+              </label>
+              <select
+                value={queryTarget}
+                onChange={(e) => {
+                  setQueryTarget(e.target.value);
+                  setConfirmRemoteWrite(false);
+                }}
+                style={{
+                  padding: '0.35rem 0.6rem',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '6px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                }}
+              >
+                <option value="">Local Relate store (relate://local)</option>
+                {(queryTargets?.aura || []).map((t) => (
+                  <option key={t.connection_id} value={t.connection_id}>
+                    Aura: {t.name} ({t.connection_string})
+                  </option>
+                ))}
+              </select>
+              {queryTarget && (
+                <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    checked={confirmRemoteWrite}
+                    onChange={(e) => setConfirmRemoteWrite(e.target.checked)}
+                  />
+                  Confirm remote writes
+                </label>
+              )}
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+              Same query, either backend: flip the target to run identical Cypher on Aura after migration.
+            </p>
 
             <textarea
               value={query}

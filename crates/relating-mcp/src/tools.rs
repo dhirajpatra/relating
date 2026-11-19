@@ -1,13 +1,16 @@
 use crate::error::McpError;
 use crate::protocol::{McpState, ToolDefinition, ToolHandler, ToolRegistry};
 use relating_ai::create_ai_provider;
-use relating_core::{Project, ProjectId, RetrievalStrategy};
+use relating_core::{AuraConnectionId, Project, ProjectId, RetrievalStrategy};
 use relating_graph::GraphBackend;
 use relating_metadata::{
     count_chunks_for_profile, get_aura_connection, get_evaluation, get_latest_ontology,
     get_project, list_embedding_profiles, list_evaluations, list_sources,
 };
-use relating_migrate::{analyze_project, preview_migration, DEFAULT_BATCH_SIZE};
+use relating_migrate::{
+    analyze_project, preview_migration, proxied_read, BoltBackend, BoltConfig, BoltUri,
+    DEFAULT_BATCH_SIZE,
+};
 use relating_retrieval::run_retrieval;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -196,6 +199,30 @@ async fn read_cypher_fn(
         }
     }
     let limit = Some(arg_usize(args, "limit", 100).clamp(1, 1000) as u32);
+    // Optional backend flip: the same query text runs on Aura instead of the
+    // local store, returned in the identical shape. Absent by default.
+    if let Some(connection_id) = arg_str(args, "connection_id") {
+        let conn_id = AuraConnectionId::parse(&connection_id).map_err(|e| {
+            McpError::InvalidArguments(format!("Invalid connection id '{}': {}", connection_id, e))
+        })?;
+        let conn = get_aura_connection(&state.pool, &conn_id)
+            .await?
+            .ok_or_else(|| McpError::Scope(format!("Connection '{}' is not in scope", conn_id)))?;
+        if conn.project_id != *project {
+            return Err(McpError::Scope(format!(
+                "Connection '{}' is not in scope",
+                conn_id
+            )));
+        }
+        let uri = BoltUri::parse(&conn.uri)?;
+        let password = relating_core::resolve_secret(&conn.auth_env_var)
+            .map_err(McpError::InvalidArguments)?;
+        let mut config = BoltConfig::new(uri, conn.username.clone(), password);
+        config.database = conn.database.clone();
+        let backend = BoltBackend::new(config);
+        let result = proxied_read(&backend, &query, params, limit).await?;
+        return to_pretty(&result);
+    }
     let graph_path = state.project_graph_path(project);
     // Execute_read opens the store read-only: writes are rejected by the engine.
     let result = state
@@ -439,12 +466,13 @@ pub fn build_registry() -> ToolRegistry {
     define_tool!(
         ReadCypher,
         "read_cypher",
-        "Run a read-only Cypher query with bound parameters. Writes are rejected.",
+        "Run a read-only Cypher query with bound parameters. Writes are rejected. Pass connection_id to run the identical statement on Aura instead of the local store.",
         object_schema(
             serde_json::json!({
                 "query": {"type": "string", "description": "Read-only Cypher statement"},
                 "params": {"type": "object", "description": "Bound parameters"},
                 "limit": {"type": "integer", "default": 100},
+                "connection_id": {"type": "string", "description": "Optional Aura connection id; when set, the same statement is proxied to Aura and returned in the identical shape"},
             }),
             &["query"]
         ),

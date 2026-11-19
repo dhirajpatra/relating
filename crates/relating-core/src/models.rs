@@ -223,7 +223,14 @@ pub struct Source {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterSourceRequest {
     pub filename: String,
+    /// UTF-8 text content. Optional when `content_base64` carries the bytes
+    /// (required for binary documents such as PDF and DOCX).
+    #[serde(default)]
     pub content: String,
+    /// Base64-encoded raw bytes for binary uploads. When present it takes
+    /// precedence over `content` and is decoded verbatim.
+    #[serde(default)]
+    pub content_base64: Option<String>,
     #[serde(default)]
     pub content_type: Option<String>,
 }

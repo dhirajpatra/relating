@@ -4,8 +4,9 @@ use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
 use relating_advisor::{
-    analyze_query, analyze_structure, estimate_sizing, measure_target, QueryFinding,
-    SizingEstimate, StructureNote, TargetMeasurements,
+    analyze_query, analyze_structure, estimate_sizing, estimate_sizing_with_vectors,
+    measure_target, QueryFinding, SizingEstimate, StructureNote, TargetMeasurements,
+    VectorSizingInput,
 };
 use relating_core::{AuraConnectionId, ProjectId};
 use relating_graph::GraphBackend;
@@ -29,6 +30,16 @@ pub struct AnalyzeRequest {
     pub connection_id: Option<String>,
     #[serde(default)]
     pub measure: bool,
+    /// Optional embedding workloads to size: each entry needs `dimensions`
+    /// and `vector_count` (`profile_name` defaults to "default"). When
+    /// present, vector bytes are folded into storage and dimension/tier fit
+    /// is checked before any batch write.
+    #[serde(default)]
+    pub vectors: Vec<VectorSizingInput>,
+    /// Optional target Aura tier for vector RAM checks (preset id, `<N>gb`,
+    /// `<N>mb`, or `custom:<mb>`). Only used when `vectors` is non-empty.
+    #[serde(default)]
+    pub aura_tier: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -88,7 +99,23 @@ pub async fn analyze_handler(
     let structure = analyze_structure(state.graph.as_ref(), &graph_path)?;
 
     let schema = state.graph.get_schema(&graph_path).unwrap_or_default();
-    let sizing = estimate_sizing(schema.node_count, schema.relationship_count);
+    let sizing = if payload.vectors.is_empty() {
+        estimate_sizing(schema.node_count, schema.relationship_count)
+    } else {
+        let tier = payload
+            .aura_tier
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(relating_migrate::parse_tier)
+            .transpose()?;
+        estimate_sizing_with_vectors(
+            schema.node_count,
+            schema.relationship_count,
+            &payload.vectors,
+            tier.as_ref(),
+        )
+    };
 
     let measurements = if payload.measure {
         let conn_id_str = payload.connection_id.ok_or_else(|| {

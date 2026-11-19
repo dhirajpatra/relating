@@ -359,6 +359,135 @@ impl BoltClient {
         }
     }
 
+    /// RUN + PULL that also returns the result column names.
+    ///
+    /// Like [`BoltClient::run`] this pipelines RUN and PULL, then reads every
+    /// response: the RUN SUCCESS (which carries `fields` on real servers) is
+    /// captured and reading continues through RECORDs to the final SUCCESS.
+    /// Proxy mode uses it so Aura results carry the same shaped columns as
+    /// local Relate results. Existing callers of `run` are unaffected.
+    pub async fn run_records_with_fields(
+        &mut self,
+        query: &str,
+        params: BTreeMap<String, BoltValue>,
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<Vec<BoltValue>>,
+            BTreeMap<String, BoltValue>,
+        ),
+        MigrateError,
+    > {
+        tokio::time::timeout(
+            self.query_timeout,
+            self.run_records_with_fields_inner(query, params),
+        )
+        .await
+        .map_err(|_| MigrateError::Timeout("Query timed out".to_string()))?
+    }
+
+    async fn run_records_with_fields_inner(
+        &mut self,
+        query: &str,
+        params: BTreeMap<String, BoltValue>,
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<Vec<BoltValue>>,
+            BTreeMap<String, BoltValue>,
+        ),
+        MigrateError,
+    > {
+        let empty = BTreeMap::new();
+        self.send_message(
+            0x10,
+            &[
+                BoltValue::String(query.to_string()),
+                BoltValue::Map(params),
+                BoltValue::Map(empty),
+            ],
+        )
+        .await?;
+
+        let mut pull_extra = BTreeMap::new();
+        pull_extra.insert("n".to_string(), BoltValue::Int(-1));
+        self.send_message(0x3F, &[BoltValue::Map(pull_extra)])
+            .await?;
+
+        fn columns_of(meta: &BTreeMap<String, BoltValue>) -> Vec<String> {
+            match meta.get("fields") {
+                Some(BoltValue::List(names)) => names
+                    .iter()
+                    .filter_map(|name| name.as_str().map(|s| s.to_string()))
+                    .collect(),
+                _ => Vec::new(),
+            }
+        }
+
+        let mut columns = Vec::new();
+        let mut rows = Vec::new();
+        loop {
+            let (tag, fields) = self.recv_message().await?;
+            match tag {
+                0x71 => match fields.as_slice() {
+                    [BoltValue::List(cols)] => rows.push(cols.clone()),
+                    _ => {
+                        return Err(MigrateError::Protocol(
+                            "Malformed RECORD message".to_string(),
+                        ));
+                    }
+                },
+                0x70 => match fields.as_slice() {
+                    [BoltValue::Map(meta)] => {
+                        // Real servers send RUN SUCCESS (`fields`, never
+                        // `stats`) before any RECORD, then the final PULL
+                        // SUCCESS (no `fields`). Test fakes may attach
+                        // `fields` to the final SUCCESS instead; accept them
+                        // from whichever SUCCESS names them.
+                        let found = columns_of(meta);
+                        let has_fields = !found.is_empty();
+                        if has_fields {
+                            columns = found;
+                        }
+                        let is_run_response =
+                            has_fields && !meta.contains_key("stats") && rows.is_empty();
+                        if is_run_response {
+                            continue;
+                        }
+                        return Ok((columns, rows, meta.clone()));
+                    }
+                    _ => {
+                        return Err(MigrateError::Protocol(
+                            "Malformed SUCCESS message".to_string(),
+                        ));
+                    }
+                },
+                0x7F => return Err(self.protocol_failure(&fields).await),
+                0x7E => {
+                    return Err(MigrateError::Protocol(
+                        "Server ignored the request (previous failure)".to_string(),
+                    ));
+                }
+                _ => {
+                    return Err(MigrateError::Protocol(format!(
+                        "Unexpected response message {:#04x}",
+                        tag
+                    )));
+                }
+            }
+        }
+    }
+
+    async fn protocol_failure(&mut self, fields: &[BoltValue]) -> MigrateError {
+        let (code, message) = failure_details(fields);
+        self.reset_after_failure().await;
+        if code.contains("Unauthorized") || code.contains("Authentication") {
+            MigrateError::Auth(message)
+        } else {
+            MigrateError::Protocol(format!("{}: {}", code, message))
+        }
+    }
+
     /// Single request/response exchange (HELLO, BEGIN, COMMIT, ...).
     async fn exchange(
         &mut self,

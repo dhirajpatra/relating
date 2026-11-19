@@ -17,6 +17,13 @@ Request (all fields optional):
 - CSV/JSON sources produce one chunk per record (`field: value` lines with
   `lineage_ref` provenance).
 - Text sources are split into overlapping prose chunks.
+- PDF sources are extracted per page (`page_<n>_block_<m>` lineage with a
+  `page_number` field) and chunked like prose.
+- DOCX sources become paragraph records with heading-derived `section`
+  context (`para_<n>` lineage) plus table-row records (`table_<t>_row_<r>`
+  lineage with `cells`); both chunk like prose.
+- Binary PDF/DOCX uploads travel as `content_base64` (see Sources); legacy
+  `.doc` (OLE) is rejected with a convert-to-`.docx` message.
 - Generation is idempotent: chunks are unique on `(profile_id, content_hash)`
   and already-indexed chunks are skipped, never re-embedded.
 - The embedding profile is created on first use; dimensions are discovered

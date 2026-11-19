@@ -7,6 +7,18 @@ use tracing::info;
 
 pub type DbPool = Pool<Sqlite>;
 
+/// Classify a metadata database URL without connecting.
+/// Returns `"postgres"` for `postgres://` / `postgresql://` URLs and
+/// `"sqlite"` for everything else (SQLite is the default runtime store).
+pub fn db_url_kind(database_url: &str) -> &'static str {
+    let lower = database_url.trim().to_ascii_lowercase();
+    if lower.starts_with("postgres://") || lower.starts_with("postgresql://") {
+        "postgres"
+    } else {
+        "sqlite"
+    }
+}
+
 pub async fn init_db(database_url: &str) -> Result<DbPool, RelatingError> {
     // If it's a file URL or path, ensure parent directory exists
     if database_url.starts_with("sqlite://") && !database_url.contains(":memory:") {

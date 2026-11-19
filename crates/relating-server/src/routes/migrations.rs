@@ -15,9 +15,10 @@ use relating_metadata::{
     update_migration,
 };
 use relating_migrate::{
-    analyze_project, dry_run, json_to_bolt, migrate_node_batch, migrate_relationship_batch,
-    preview_migration, verify_migration, BoltValue, CompatFinding, DryRunReport, MigrationPlan,
-    Neo4jBackend, SampleExpectation, SourceCounts, VerificationReport, DEFAULT_BATCH_SIZE,
+    analyze_project_with_options, dry_run, json_to_bolt, migrate_node_batch,
+    migrate_relationship_batch, preview_migration, vector_blockers_for_project, verify_migration,
+    AnalysisOptions, BoltValue, CompatFinding, DryRunReport, MigrationPlan, Neo4jBackend,
+    SampleExpectation, SourceCounts, VerificationReport, DEFAULT_BATCH_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -26,6 +27,10 @@ use std::collections::{BTreeMap, HashMap};
 pub struct AnalyzeRequest {
     #[serde(default)]
     pub connection_id: Option<String>,
+    /// Optional target Aura tier for vector RAM checks: a preset id
+    /// (`free`, `professional-4gb`, ...), `<N>gb`, `<N>mb`, or `custom:<mb>`.
+    #[serde(default)]
+    pub aura_tier: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,12 +105,15 @@ pub async fn analyze_migration_handler(
         None => None,
     };
 
-    let report = analyze_project(
+    let report = analyze_project_with_options(
         &state.pool,
         state.graph.as_ref(),
         &project_id,
         &graph_path,
         connection.as_ref(),
+        AnalysisOptions {
+            aura_tier: payload.aura_tier,
+        },
     )
     .await?;
 
@@ -140,7 +148,7 @@ pub async fn plan_migration_handler(
         .batch_size
         .unwrap_or(DEFAULT_BATCH_SIZE)
         .clamp(1, 5000);
-    let (plan, report) = preview_migration(
+    let (plan, mut report) = preview_migration(
         &state.pool,
         state.graph.as_ref(),
         &project_id,
@@ -149,6 +157,11 @@ pub async fn plan_migration_handler(
         batch_size,
     )
     .await?;
+    // Deterministic vector blockers (embedding dims Aura cannot index) gate
+    // approval exactly like unreachable targets and empty sources.
+    report
+        .blockers
+        .extend(vector_blockers_for_project(&state.pool, &project_id).await?);
 
     let now = Utc::now();
     let mut migration = Migration {
@@ -209,7 +222,10 @@ pub async fn dry_run_handler(
         Ok(backend) => backend.test_connection().await,
         Err(e) => Err(relating_migrate::MigrateError::Connection(e.to_string())),
     };
-    let report = dry_run(plan, &target_check);
+    let mut report = dry_run(plan, &target_check);
+    report
+        .blockers
+        .extend(vector_blockers_for_project(&state.pool, &migration.project_id).await?);
 
     // A dry run performs zero remote writes by construction.
     migration.report = serde_json::json!({ "dry_run": report });

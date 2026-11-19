@@ -49,6 +49,16 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["loggin
 webpki-roots = "1.0"
 regex = "1.13"
 rand = "0.9"
+# NB: keyring 3.x ships with NO default features; without explicit backends it
+# silently builds the in-memory mock store (writes succeed and vanish on
+# exit). Always enable the real per-OS backends (non-matching platforms are
+# no-ops via target-gated deps in keyring's manifest).
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
+sqlparser = "0.64"
+base64 = "0.22"
+pdf-extract = "0.12"
+zip = "2.2"
+quick-xml = "0.38"
 
 # Internal crates
 relating-core = { path = "crates/relating-core" }

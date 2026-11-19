@@ -18,8 +18,10 @@ Every connection is bound to one project; tools outside that scope are rejected.
 
 `list_projects`, `get_project_summary`, `get_graph_schema`, `search_sources`,
 `search_graph`, `read_cypher` (engine-enforced read-only store open, default
-limit 100), `retrieve_context`, `explain_retrieval`, `get_ingestion_status`,
-`get_evaluation_report`, `analyze_aura_compatibility`, `preview_migration`.
+limit 100; optional `connection_id` proxies the identical statement to Aura
+in the same result shape — see `backend_flip.md`), `retrieve_context`,
+`explain_retrieval`, `get_ingestion_status`, `get_evaluation_report`,
+`analyze_aura_compatibility`, `preview_migration`.
 
 Tool failures return MCP `isError` content, never stack traces or secrets.
 Calls time out after 30s. Write tools (`ingest_source`, `write_cypher`,

@@ -34,6 +34,9 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
   const [connections, setConnections] = useState<AuraConnection[]>([]);
   const [selectedConnId, setSelectedConnId] = useState('');
   const [measure, setMeasure] = useState(false);
+  const [vectorDims, setVectorDims] = useState('');
+  const [vectorCount, setVectorCount] = useState('');
+  const [advisorTier, setAdvisorTier] = useState('free');
   const [advisorResult, setAdvisorResult] = useState<AdvisorResponse | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [advisorError, setAdvisorError] = useState<string | null>(null);
@@ -96,11 +99,23 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
       if (!Array.isArray(queries)) {
         throw new Error('Queries must be a JSON array.');
       }
+      const vectors =
+        vectorDims.trim() !== '' && vectorCount.trim() !== ''
+          ? [
+              {
+                profile_name: 'default',
+                dimensions: Number(vectorDims),
+                vector_count: Number(vectorCount),
+              },
+            ]
+          : undefined;
       const res = await api.advisorAnalyze(
         projectId,
         queries,
         measure ? selectedConnId || undefined : undefined,
-        measure || undefined
+        measure || undefined,
+        vectors,
+        vectors ? advisorTier || undefined : undefined
       );
       setAdvisorResult(res);
     } catch (err: unknown) {
@@ -346,6 +361,66 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
             />
             Measure on target
           </label>
+          <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            Vector dims{' '}
+            <input
+              type="number"
+              min={0}
+              value={vectorDims}
+              onChange={(e) => setVectorDims(e.target.value)}
+              placeholder="768"
+              title="Embedding dimensions to size (optional)"
+              style={{
+                width: '80px',
+                padding: '0.35rem 0.5rem',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                color: 'var(--text-primary)',
+                fontSize: '0.8rem',
+              }}
+            />
+          </label>
+          <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            Vectors{' '}
+            <input
+              type="number"
+              min={0}
+              value={vectorCount}
+              onChange={(e) => setVectorCount(e.target.value)}
+              placeholder="10000"
+              title="Number of vectors to size (optional)"
+              style={{
+                width: '100px',
+                padding: '0.35rem 0.5rem',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                color: 'var(--text-primary)',
+                fontSize: '0.8rem',
+              }}
+            />
+          </label>
+          <select
+            value={advisorTier}
+            onChange={(e) => setAdvisorTier(e.target.value)}
+            title="Target Aura tier for vector RAM checks"
+            style={{
+              padding: '0.35rem 0.5rem',
+              backgroundColor: 'var(--bg-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              color: 'var(--text-primary)',
+              fontSize: '0.8rem',
+            }}
+          >
+            <option value="">No tier</option>
+            <option value="free">Free (~1 GB)</option>
+            <option value="professional-2gb">Pro 2 GB</option>
+            <option value="professional-4gb">Pro 4 GB</option>
+            <option value="professional-8gb">Pro 8 GB</option>
+            <option value="dedicated-16gb">Dedicated 16 GB+</option>
+          </select>
           <button
             onClick={handleAnalyze}
             disabled={analyzing}
@@ -460,6 +535,41 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
                   caveat: {c}
                 </div>
               ))}
+              {advisorResult.sizing.vectors && (
+                <div style={{ marginTop: '0.4rem' }}>
+                  <strong>
+                    Vectors: ~{advisorResult.sizing.vectors.total_vector_mb} MB
+                    {advisorResult.sizing.vectors.tier_id
+                      ? ` (tier ${advisorResult.sizing.vectors.tier_id})`
+                      : ' (no tier)'}
+                  </strong>
+                  {advisorResult.sizing.vectors.fits.map((f, i) => (
+                    <div key={i} style={{ marginTop: '0.25rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                      <span
+                        style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          marginRight: '0.4rem',
+                          color:
+                            f.verdict === 'SUPPORTED'
+                              ? 'var(--success)'
+                              : f.verdict === 'UNSUPPORTED'
+                                ? 'var(--danger)'
+                                : '#f59e0b',
+                        }}
+                      >
+                        {f.verdict}
+                      </span>
+                      {f.detail}
+                      {f.remediation && (
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                          → {f.remediation}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {advisorResult.measurements && (

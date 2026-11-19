@@ -11,3 +11,10 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
+keyring = { workspace = true, optional = true }
+
+[features]
+default = []
+# Real OS backends come from the workspace keyring features (see root
+# Cargo.toml): without them keyring silently falls back to its mock store.
+os-keychain = ["keyring"]

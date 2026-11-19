@@ -345,3 +345,36 @@ async fn test_full_migration_against_fake_bolt_server() {
 
     server.abort();
 }
+
+#[tokio::test]
+async fn test_analyze_accepts_and_validates_aura_tier() {
+    let (app, _dir) = setup_test_app().await;
+    let (status, proj) = post_json(
+        &app,
+        "/api/v1/projects".to_string(),
+        json!({"name": "Tier check"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proj["id"].as_str().unwrap();
+
+    // Source-only analysis with a tier succeeds (no profiles => no vector findings).
+    let (status, analysis) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/analyze", pid),
+        json!({"aura_tier": "professional-4gb"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!analysis["source_findings"].as_array().unwrap().is_empty());
+
+    // Unknown tiers are rejected before any analysis runs.
+    let (status, err) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/analyze", pid),
+        json!({"aura_tier": "mystery-tier"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(err["error"]["message"].as_str().unwrap().contains("mystery-tier"));
+}

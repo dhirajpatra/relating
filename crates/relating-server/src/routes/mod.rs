@@ -18,6 +18,7 @@ pub mod schema;
 pub mod shadow;
 pub mod sources;
 pub mod synth;
+pub mod targets;
 
 use crate::state::AppState;
 use axum::routing::{delete, get, post};
@@ -49,6 +50,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/projects/:id/cypher/write",
             post(cypher::cypher_write_handler),
+        )
+        .route(
+            "/projects/:id/query-targets",
+            get(targets::list_query_targets_handler),
         )
         // Sources endpoints
         .route(

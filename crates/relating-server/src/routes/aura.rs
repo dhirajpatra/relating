@@ -46,12 +46,7 @@ pub fn build_backend(
     }
     let password = match password_override {
         Some(p) => p,
-        None => std::env::var(&conn.auth_env_var).map_err(|_| {
-            AppError::BadRequest(format!(
-                "Password environment variable '{}' is not set. Export it before testing or migrating (the password is never stored).",
-                conn.auth_env_var
-            ))
-        })?,
+        None => relating_core::resolve_secret(&conn.auth_env_var).map_err(AppError::BadRequest)?,
     };
     let mut config = BoltConfig::new(uri, conn.username.clone(), password);
     config.database = conn.database.clone();

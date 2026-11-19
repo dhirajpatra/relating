@@ -99,6 +99,29 @@ async fn send_success(stream: &mut TcpStream, stats: Vec<(&str, i64)>) -> bool {
     send_message(stream, 0x70, &[BoltValue::Map(map)]).await
 }
 
+async fn send_success_with_fields(
+    stream: &mut TcpStream,
+    stats: Vec<(&str, i64)>,
+    fields: Vec<&str>,
+) -> bool {
+    let mut map = BTreeMap::new();
+    let stats_map: BTreeMap<String, BoltValue> = stats
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), BoltValue::Int(v)))
+        .collect();
+    map.insert("stats".to_string(), BoltValue::Map(stats_map));
+    map.insert(
+        "fields".to_string(),
+        BoltValue::List(
+            fields
+                .into_iter()
+                .map(|f| BoltValue::String(f.to_string()))
+                .collect(),
+        ),
+    );
+    send_message(stream, 0x70, &[BoltValue::Map(map)]).await
+}
+
 async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) {
     // Handshake: read magic + versions, offer Bolt 4.4.
     let mut hello = [0u8; 20];
@@ -213,7 +236,8 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
                     {
                         break;
                     }
-                    if !send_success(&mut stream, vec![]).await {
+                    // Name the column so proxy-mode tests can assert the shaped result.
+                    if !send_success_with_fields(&mut stream, vec![], vec!["c"]).await {
                         break;
                     }
                 } else if query.contains("RETURN n AS node") {

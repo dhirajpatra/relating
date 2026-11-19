@@ -1,10 +1,12 @@
 pub mod backend;
 pub mod error;
 pub mod schema;
+pub mod target;
 pub mod value_converter;
 
 pub use backend::{GraphBackend, RelateBackend};
 pub use error::GraphError;
+pub use target::QueryTarget;
 pub use schema::{
     CytoscapeEdge, CytoscapeEdgeData, CytoscapeElements, CytoscapeGraph, CytoscapeNode,
     CytoscapeNodeData, GraphQueryResult, GraphSchemaInfo, GraphWriteResult,

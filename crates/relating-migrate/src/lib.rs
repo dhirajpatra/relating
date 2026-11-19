@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod aura_tiers;
 pub mod backend;
 pub mod bolt;
 pub mod compat;
@@ -6,10 +7,23 @@ pub mod error;
 pub mod execute;
 pub mod packstream;
 pub mod plan;
+pub mod proxy;
 pub mod verify;
 
-pub use analysis::{analyze_project, preview_migration, test_target, AnalysisReport};
-pub use backend::{BoltBackend, MockNeo4jBackend, Neo4jBackend, TargetInfo};
+pub use analysis::{
+    analyze_project, analyze_project_with_options, preview_migration, test_target, vector_blockers_for_project,
+    AnalysisOptions, AnalysisReport,
+};
+pub use aura_tiers::{
+    assess_workloads, check_vector_fit, estimate_vector_bytes, format_mb, parse_tier,
+    vector_dimension_blockers, well_known_tiers, AuraTier, VectorFit, VectorWorkload,
+    MAX_VECTOR_DIMENSIONS, MIN_VECTOR_DIMENSIONS, VECTOR_BYTES_PER_DIMENSION,
+    VECTOR_RAM_BUDGET_FRACTION,
+};
+pub use backend::{
+    BoltBackend, MockNeo4jBackend, Neo4jBackend, QueryRecords, TargetInfo,
+};
+pub use proxy::{apply_proxy_limit, proxied_read, summarize_write_meta};
 pub use bolt::{chunk_message, BoltClient, BoltConfig, BoltUri};
 pub use compat::{analyze_source, analyze_target, CapabilityVerdict, CompatFinding};
 pub use error::MigrateError;

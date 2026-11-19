@@ -37,7 +37,11 @@ see [docs/api/ci.md](docs/api/ci.md)).
 ontology, graph explorer, Cypher, embeddings, retrieval, grounded Q&A, evaluation,
 MCP agent server, Aura migration over Bolt, schema-as-code, portability compiler,
 CI/CD gates, shadow testing, graph debugger, synthetic data, and the performance
-advisor. See [Visual overview](#visual-overview) and the [API docs](docs/api/) for
+advisor. Also implemented: Relate↔Aura backend flip without query rewrites
+([backend_flip.md](docs/api/backend_flip.md)), Aura vector-index fit checks,
+PDF/DOCX ingestion, merge-upsert migration disclosure, and team secrets plus
+PostgreSQL provisioning ([postgres.md](docs/postgres.md), [secrets.md](docs/secrets.md)).
+See [Visual overview](#visual-overview) and the [API docs](docs/api/) for
 details.
 
 ---
@@ -78,7 +82,7 @@ flowchart TB
 
 | Tab | Capability | Release |
 |---|---|---|
-| 1. Sources | CSV/JSON/text ingest, lineage | B |
+| 1. Sources | CSV/JSON/text/PDF/DOCX ingest, lineage | B |
 | 2. Ontology | AI proposal, approval gate | B |
 | 3. Graph Explorer | Cytoscape visualization | B |
 | 4. Cypher Console | Read/write workbench | A–B |
@@ -166,10 +170,11 @@ flowchart TB
     AI -.-> OLL["Ollama / OpenAI / mock<br/>(mock: testing only)"]
 ```
 
-Secrets are never stored: Aura passwords live in environment variables at runtime,
+Secrets are never stored: Aura passwords resolve at runtime from environment
+variables, mounted secret files, or the OS keychain (see [docs/secrets.md](docs/secrets.md)),
 and provider keys stay in project configuration outside version control.
-(Roadmap: PostgreSQL metadata and OS keychain / Vault secret backends for
-server deployments.)
+(Team PostgreSQL metadata: schema provisioning and validation are available —
+see [docs/postgres.md](docs/postgres.md); Vault secret backends remain roadmap.)
 
 ### Technology decisions
 
@@ -488,7 +493,7 @@ Do not plan this as a months-long architecture exercise. Build a thin vertical s
 - Schema and graph explorer.
 - Read-only Cypher console.
 
-### Milestone C — first GraphRAG answer ✅ (text sources; PDF/DOCX not yet)
+### Milestone C — first GraphRAG answer ✅ (text, PDF, and DOCX sources)
 - Chunking and embedding.
 - Vector/keyword/hybrid retrieval.
 - Grounded Q&A with source citations.

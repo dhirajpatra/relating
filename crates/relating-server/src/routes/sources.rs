@@ -29,8 +29,22 @@ pub async fn register_source_handler(
         return Err(AppError::BadRequest("Filename cannot be empty".to_string()));
     }
 
-    let raw_bytes = payload.content.as_bytes();
-    let content_hash = compute_sha256(raw_bytes);
+    // Binary uploads (PDF/DOCX) arrive as base64; text uploads use `content`.
+    let raw_bytes: Vec<u8> = match payload.content_base64.as_deref() {
+        Some(encoded) if !encoded.trim().is_empty() => {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .map_err(|e| AppError::BadRequest(format!("Invalid base64 content: {}", e)))?
+        }
+        _ => payload.content.as_bytes().to_vec(),
+    };
+    if raw_bytes.is_empty() {
+        return Err(AppError::BadRequest(
+            "Source content is empty: provide 'content' or 'content_base64'".to_string(),
+        ));
+    }
+    let content_hash = compute_sha256(&raw_bytes);
     let byte_size = raw_bytes.len() as u64;
     let source_id = SourceId::new();
 
@@ -39,7 +53,7 @@ pub async fn register_source_handler(
         source_id.clone(),
         filename,
         payload.content_type.as_deref(),
-        raw_bytes,
+        &raw_bytes,
     )?;
 
     // Store source file on disk
@@ -48,7 +62,7 @@ pub async fn register_source_handler(
         let _ = std::fs::create_dir_all(&sources_dir);
     }
     let file_dest = sources_dir.join(format!("{}_{}", source_id, filename));
-    let _ = std::fs::write(&file_dest, raw_bytes);
+    let _ = std::fs::write(&file_dest, &raw_bytes);
 
     let metadata = serde_json::json!({
         "total_records": profile.total_records,

@@ -29,6 +29,13 @@ fn usage() -> ! {
     eprintln!("  synth generate --project ID --out FILE [--scale F] [--seed N] [--edge-cases a,b] [--materialize]");
     eprintln!("  advisor analyze --project ID --queries FILE [--connection CID] [--measure] [--fail-on-warning]");
     eprintln!("  demo seed [--name NAME]   (create a seeded demo project; prints its ID)");
+    eprintln!(
+        "  secrets set --name NAME --from-file PATH   (OS keychain; needs --features os-keychain)"
+    );
+    eprintln!("  secrets check --name NAME   (report SET/NOT SET without printing the value)");
+    eprintln!("  secrets delete --name NAME   (OS keychain; needs --features os-keychain)");
+    eprintln!("  db check-postgres --url URL   (read-only; needs --features postgres)");
+    eprintln!("  db init-postgres --url URL   (idempotent provision; needs --features postgres)");
     eprintln!();
     eprintln!("Exit codes: 0 pass, 1 gate/test failure, 2 usage or config error.");
     std::process::exit(2);
@@ -461,12 +468,7 @@ async fn cmd_shadow_run(
     let conn = get_aura_connection(&ctx.pool, &conn_id)
         .await?
         .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
-    let password = std::env::var(&conn.auth_env_var).map_err(|_| {
-        CliError::Usage(format!(
-            "Password environment variable '{}' is not set",
-            conn.auth_env_var
-        ))
-    })?;
+    let password = relating_core::resolve_secret(&conn.auth_env_var).map_err(CliError::Usage)?;
     let uri = relating_migrate::BoltUri::parse(&conn.uri).map_err(CliError::Migrate)?;
     let mut config = relating_migrate::BoltConfig::new(uri, conn.username.clone(), password);
     config.database = conn.database.clone();
@@ -745,12 +747,8 @@ async fn cmd_advisor_analyze(
         let conn = get_aura_connection(&ctx.pool, &conn_id)
             .await?
             .ok_or_else(|| CliError::Usage("Aura connection not found".to_string()))?;
-        let password = std::env::var(&conn.auth_env_var).map_err(|_| {
-            CliError::Usage(format!(
-                "Password environment variable '{}' is not set",
-                conn.auth_env_var
-            ))
-        })?;
+        let password =
+            relating_core::resolve_secret(&conn.auth_env_var).map_err(CliError::Usage)?;
         let uri = relating_migrate::BoltUri::parse(&conn.uri).map_err(CliError::Migrate)?;
         let mut config = relating_migrate::BoltConfig::new(uri, conn.username.clone(), password);
         config.database = conn.database.clone();
@@ -877,6 +875,125 @@ async fn cmd_demo_seed(
     Ok(0)
 }
 
+async fn cmd_secrets_set(
+    _opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let name = require_flag(flags, "name")?;
+    let path = require_flag(flags, "from-file")?;
+    let value = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::Usage(format!("Cannot read '{}': {}", path, e)))?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CliError::Usage(format!("'{}' is empty", path)));
+    }
+    relating_core::store_secret(&name, value).map_err(CliError::Check)?;
+    println!(
+        "Stored secret '{}' in the OS keychain (service 'relating')",
+        name
+    );
+    Ok(0)
+}
+
+async fn cmd_secrets_check(
+    _opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let name = require_flag(flags, "name")?;
+    match relating_core::resolve_secret(&name) {
+        Ok(_) => {
+            println!("{}: SET", name);
+            Ok(0)
+        }
+        Err(message) => {
+            println!("{}: NOT SET", name);
+            println!("{}", message);
+            Ok(1)
+        }
+    }
+}
+
+async fn cmd_secrets_delete(
+    _opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let name = require_flag(flags, "name")?;
+    relating_core::delete_secret(&name).map_err(CliError::Check)?;
+    println!("Deleted secret '{}' from the OS keychain", name);
+    Ok(0)
+}
+
+async fn cmd_db_check_postgres(
+    opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let url = require_flag(flags, "url")?;
+    #[cfg(feature = "postgres")]
+    {
+        let report = relating_metadata::check_postgres(&url).await?;
+        match opts.format {
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            ),
+            OutputFormat::Text => {
+                println!("{}", report.message);
+                if let Some(version) = &report.server_version {
+                    println!("server: {}", version);
+                }
+                println!(
+                    "tables: {}/{} present",
+                    report.found_tables.len(),
+                    report.expected_tables.len()
+                );
+            }
+        }
+        Ok(if report.schema_ready { 0 } else { 1 })
+    }
+    #[cfg(not(feature = "postgres"))]
+    {
+        let _ = (opts, url);
+        Err(CliError::Usage(
+            "PostgreSQL support is not enabled in this build; rebuild with --features postgres"
+                .to_string(),
+        ))
+    }
+}
+
+async fn cmd_db_init_postgres(
+    opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let url = require_flag(flags, "url")?;
+    #[cfg(feature = "postgres")]
+    {
+        let report = relating_metadata::ensure_pg_schema(&url).await?;
+        match opts.format {
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            ),
+            OutputFormat::Text => {
+                println!("{}", report.message);
+                println!(
+                    "tables: {}/{} present",
+                    report.found_tables.len(),
+                    report.expected_tables.len()
+                );
+            }
+        }
+        Ok(if report.schema_ready { 0 } else { 1 })
+    }
+    #[cfg(not(feature = "postgres"))]
+    {
+        let _ = (opts, url);
+        Err(CliError::Usage(
+            "PostgreSQL support is not enabled in this build; rebuild with --features postgres"
+                .to_string(),
+        ))
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -903,6 +1020,11 @@ async fn main() {
             ["synth", "generate"] => cmd_synth_generate(&opts, &flags).await,
             ["advisor", "analyze"] => cmd_advisor_analyze(&opts, &flags).await,
             ["demo", "seed"] => cmd_demo_seed(&opts, &flags).await,
+            ["secrets", "set"] => cmd_secrets_set(&opts, &flags).await,
+            ["secrets", "check"] => cmd_secrets_check(&opts, &flags).await,
+            ["secrets", "delete"] => cmd_secrets_delete(&opts, &flags).await,
+            ["db", "check-postgres"] => cmd_db_check_postgres(&opts, &flags).await,
+            ["db", "init-postgres"] => cmd_db_init_postgres(&opts, &flags).await,
             _ => Err(CliError::Usage(format!(
                 "Unknown command: {}",
                 positionals.join(" ")
