@@ -136,6 +136,57 @@ pub async fn list_aura_connections_including_env(
     Ok(conns)
 }
 
+/// Persist a resolved connection if no stored row carries its id.
+///
+/// Migrations reference `aura_connections(id)` via foreign key, so planning
+/// against the transient `.env` connection materializes it first (same
+/// stable id, so later steps resolve the identical target). Read paths
+/// never call this: listing and testing keep working against the transient
+/// connection without writing. On a display-name clash with an unrelated
+/// stored row, the materialized copy takes a suffixed name.
+pub async fn ensure_aura_connection(
+    pool: &SqlitePool,
+    conn: &AuraConnection,
+) -> Result<AuraConnection, RelatingError> {
+    if let Some(stored) = get_aura_connection(pool, &conn.id).await? {
+        return Ok(stored);
+    }
+    let mut candidate = conn.clone();
+    for attempt in 0..4 {
+        if attempt > 0 {
+            candidate.name = format!("{} {}", conn.name, attempt + 1);
+        }
+        let inserted = sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO aura_connections (id, project_id, name, uri, username, database, auth_env_var, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(candidate.id.to_string())
+        .bind(candidate.project_id.to_string())
+        .bind(&candidate.name)
+        .bind(&candidate.uri)
+        .bind(&candidate.username)
+        .bind(candidate.database.clone())
+        .bind(&candidate.auth_env_var)
+        .bind(candidate.created_at.to_rfc3339())
+        .execute(pool)
+        .await
+        .map_err(|e| RelatingError::Database(format!("Failed to insert Aura connection: {}", e)))?;
+        if inserted.rows_affected() > 0 {
+            return Ok(candidate);
+        }
+        // Either another writer won the race (return the stored row) or the
+        // name clashed with an unrelated row (retry with a suffix).
+        if let Some(stored) = get_aura_connection(pool, &conn.id).await? {
+            return Ok(stored);
+        }
+    }
+    Err(RelatingError::Database(
+        "Failed to materialize the Aura connection: display-name clash".to_string(),
+    ))
+}
+
 pub async fn delete_aura_connection(
     pool: &SqlitePool,
     id: &AuraConnectionId,
@@ -147,4 +198,100 @@ pub async fn delete_aura_connection(
         .map_err(|e| RelatingError::Database(format!("Failed to delete Aura connection: {}", e)))?;
 
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::init_in_memory_db;
+    use crate::migration_repo::insert_migration;
+    use crate::project_repo::insert_project;
+    use relating_core::{AiProviderConfig, Migration, MigrationId, MigrationStatus, Project};
+
+    async fn seed_project(pool: &SqlitePool) -> Project {
+        let now = Utc::now();
+        let project = Project {
+            id: ProjectId::new(),
+            name: "conn-test".to_string(),
+            description: String::new(),
+            created_at: now,
+            updated_at: now,
+            ai_config: AiProviderConfig::mock(),
+        };
+        insert_project(pool, &project).await.unwrap();
+        project
+    }
+
+    fn transient_conn(project: &Project) -> AuraConnection {
+        AuraConnection {
+            id: AuraConnectionId::new(),
+            project_id: project.id.clone(),
+            name: "aura (env)".to_string(),
+            uri: "neo4j+s://example.databases.neo4j.io".to_string(),
+            username: "neo4j".to_string(),
+            database: None,
+            auth_env_var: "AURA_PASSWORD".to_string(),
+            created_at: Utc::now(),
+        }
+    }
+
+    fn migration_for(project: &Project, conn_id: &AuraConnectionId) -> Migration {
+        let now = Utc::now();
+        Migration {
+            id: MigrationId::new(),
+            project_id: project.id.clone(),
+            connection_id: conn_id.clone(),
+            status: MigrationStatus::Planned,
+            plan: serde_json::Value::Null,
+            progress: Default::default(),
+            report: serde_json::Value::Null,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ensure_materializes_transient_connection_for_migrations() {
+        let pool = init_in_memory_db().await.unwrap();
+        let project = seed_project(&pool).await;
+        let conn = transient_conn(&project);
+
+        // Reproduces the plan-time failure: a migration cannot reference a
+        // connection row that does not exist.
+        let before = insert_migration(&pool, &migration_for(&project, &conn.id)).await;
+        assert!(
+            before.is_err(),
+            "expected the FK to reject a transient connection id"
+        );
+
+        let stored = ensure_aura_connection(&pool, &conn).await.unwrap();
+        assert_eq!(stored.id, conn.id);
+        assert_eq!(stored.uri, conn.uri);
+
+        insert_migration(&pool, &migration_for(&project, &conn.id))
+            .await
+            .expect("migration insert must succeed after ensure");
+
+        // Idempotent: second ensure returns the row without duplicating.
+        let again = ensure_aura_connection(&pool, &conn).await.unwrap();
+        assert_eq!(again.id, conn.id);
+        let rows = list_aura_connections(&pool, &project.id).await.unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_suffixes_name_on_clash() {
+        let pool = init_in_memory_db().await.unwrap();
+        let project = seed_project(&pool).await;
+
+        let mut occupant = transient_conn(&project);
+        occupant.id = AuraConnectionId::new();
+        occupant.uri = "bolt://localhost:7687".to_string();
+        insert_aura_connection(&pool, &occupant).await.unwrap();
+
+        let conn = transient_conn(&project);
+        let stored = ensure_aura_connection(&pool, &conn).await.unwrap();
+        assert_eq!(stored.id, conn.id);
+        assert_eq!(stored.name, "aura (env) 2");
+    }
 }

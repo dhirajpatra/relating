@@ -40,6 +40,10 @@ services:
       # (above) and *_FILE sidecars instead.
       RELATING_SECRET_BACKEND: auto
       AURA_PASSWORD: ${AURA_PASSWORD:-}
+      # Container-correct Ollama address (localhost here would be this
+      # container, not the ollama service). Used for Meta chat fallback and
+      # for embeddings, which the Meta API does not provide.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
     volumes:
       - relating-data:/app/data
     depends_on:

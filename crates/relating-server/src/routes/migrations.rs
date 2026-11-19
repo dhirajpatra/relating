@@ -133,6 +133,10 @@ pub async fn plan_migration_handler(
         ))
     })?;
     let conn = get_connection(&state.pool, &project_id, &conn_id).await?;
+    // Migrations reference aura_connections(id) via foreign key: persist the
+    // resolved connection (a no-op for stored rows) so planning against the
+    // transient `.env` connection does not fail the insert below.
+    let conn = relating_metadata::ensure_aura_connection(&state.pool, &conn).await?;
 
     let graph_path = state.project_graph_path(&project_id);
     let batch_size = payload

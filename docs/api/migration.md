@@ -20,6 +20,15 @@ Portability Compiler (R3); R1 migrates data, schema objects, and contracts.
   yield `502 AURA_UNREACHABLE`, bad credentials `502 AURA_AUTH_FAILED`.
   Accepts stored ids and the `.env` connection id alike.
 
+## One-shot script
+
+`./migrate-aura.sh` starts the Docker stack (`server + postgres + ollama`),
+seeds the `aura-fill` demo graph when it is missing (24 employees → 42
+nodes, 72 relationships), then runs the whole workflow below and verifies.
+It aborts before approval when the dry run reports blockers. Options:
+`--project ID`, `--connection CID`, `--fresh` (rebuild the demo graph),
+`--no-build`, `--down` (stop the stack afterwards).
+
 ## Workflow (approval-gated)
 
 1. `POST /projects/{id}/migrations/analyze` — `{connection_id?, aura_tier?}`.

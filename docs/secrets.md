@@ -87,6 +87,9 @@ export AURA_PASSWORD='<secret>'
   selects it explicitly.
 - Stored connections always win on id collisions, and the URI is never
   duplicated when a stored connection already points at it.
+- Planning a migration against the `.env` connection persists it as a
+  stored row (same stable id), since migration records reference it via
+  foreign key; every other operation keeps using it transiently.
 - `AURA_CLIENT_ID` / `AURA_CLIENT_SECRET` are Aura console API credentials
   for instance management; Relating connects over Bolt, so only `AURA_URI` +
   the password are used.
