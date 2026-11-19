@@ -157,9 +157,11 @@ services:
     ports:
       - "${NEO4J_HTTP_PORT:-7474}:7474"
       - "${NEO4J_BOLT_PORT:-7687}:7687"
-    env_file:
-      - path: .env
-        required: false
+    # NB: deliberately NO env_file here. The Neo4j entrypoint parses every
+    # NEO4J_* variable as a server setting, so importing .env wholesale
+    # (NEO4J_DATABASE, NEO4J_PASSWORD, NEO4J_*_PORT, ...) breaks startup with
+    # "Unrecognized setting" under strict validation. The ${} values below
+    # still resolve from your .env on the host — only the raw keys stay out.
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-relating-neo4j}
       # NB: every NEO4J_* var is parsed as a Neo4j config setting, so the
