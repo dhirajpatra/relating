@@ -75,6 +75,48 @@ impl BoltBackend {
     }
 }
 
+/// Render a `DatabaseNotFound` failure with the probe result attached.
+///
+/// `Some(names)` reflects what `SHOW DATABASES` returned for the configured
+/// user; `None` means even that probe failed (for example the server default
+/// database is itself unreachable), so only generic guidance is possible.
+fn format_db_not_found(database: &str, visible: Option<&[String]>) -> String {
+    match visible {
+        Some(names) if !names.is_empty() => format!(
+            "Database '{}' not found on the target. Databases visible to the configured user: {}. Set AURA_DATABASE to one of these (the Aura instance ID is not a database name).",
+            database,
+            names.join(", ")
+        ),
+        Some(_) => format!(
+            "Database '{}' not found on the target, and no databases are visible to the configured user. Check the database name and that the Bolt user has access to it.",
+            database
+        ),
+        None => format!(
+            "Database '{}' not found on the target (the instance ID is not a database name; use the database name from the Aura console, usually 'neo4j').",
+            database
+        ),
+    }
+}
+
+/// Build the enriched `DatabaseNotFound` error.
+///
+/// Best effort: asks the server which databases the current user can see via
+/// auto-commit against the server default database. Safe to call right after
+/// a failed `BEGIN` — the client already RESET the connection on FAILURE.
+async fn db_not_found_error(client: &mut BoltClient, database: &str) -> MigrateError {
+    let visible: Option<Vec<String>> = client
+        .run("SHOW DATABASES YIELD name", BTreeMap::new())
+        .await
+        .ok()
+        .map(|(rows, _)| {
+            rows.iter()
+                .filter_map(|row| row.first()?.as_str().map(|s| s.to_string()))
+                .take(10)
+                .collect()
+        });
+    MigrateError::Protocol(format_db_not_found(database, visible.as_deref()))
+}
+
 #[async_trait]
 impl Neo4jBackend for BoltBackend {
     async fn test_connection(&self) -> Result<TargetInfo, MigrateError> {
@@ -85,12 +127,8 @@ impl Neo4jBackend for BoltBackend {
         // Validate it now with an explicit transaction that reads nothing.
         if let Some(database) = self.config.database.clone() {
             if let Err(e) = client.begin(Some(&database)).await {
-                let msg = e.to_string();
-                if msg.contains("DatabaseNotFound") {
-                    return Err(MigrateError::Protocol(format!(
-                        "Database '{}' not found on the target (the instance ID is not a database name; use the database name from the Aura console, usually 'neo4j')",
-                        database
-                    )));
+                if e.to_string().contains("DatabaseNotFound") {
+                    return Err(db_not_found_error(&mut client, &database).await);
                 }
                 return Err(e);
             }
@@ -116,6 +154,7 @@ impl Neo4jBackend for BoltBackend {
         // it too, otherwise they silently hit the server default database.
         let result = if self.config.database.is_some() {
             let database = self.config.database.clone();
+            let db_name = database.clone().unwrap_or_default();
             match client.begin(database.as_deref()).await {
                 Ok(()) => match client.run(query, params).await {
                     Ok((rows, _)) => client.commit().await.map(|_| rows),
@@ -124,6 +163,9 @@ impl Neo4jBackend for BoltBackend {
                         Err(e)
                     }
                 },
+                Err(e) if e.to_string().contains("DatabaseNotFound") => {
+                    Err(db_not_found_error(client, &db_name).await)
+                }
                 Err(e) => Err(e),
             }
         } else {
@@ -147,12 +189,19 @@ impl Neo4jBackend for BoltBackend {
         self.ensure_connected(&mut guard).await?;
         let client = guard.as_mut().expect("client just connected");
         let result = if let Some(database) = self.config.database.clone() {
-            client.begin(Some(&database)).await?;
-            match client.run(query, params).await {
-                Ok((_, meta)) => client.commit().await.map(|_| meta),
-                Err(e) => {
-                    let _ = client.rollback().await;
+            if let Err(e) = client.begin(Some(&database)).await {
+                if e.to_string().contains("DatabaseNotFound") {
+                    Err(db_not_found_error(client, &database).await)
+                } else {
                     Err(e)
+                }
+            } else {
+                match client.run(query, params).await {
+                    Ok((_, meta)) => client.commit().await.map(|_| meta),
+                    Err(e) => {
+                        let _ = client.rollback().await;
+                        Err(e)
+                    }
                 }
             }
         } else {
@@ -418,6 +467,152 @@ impl Neo4jBackend for MockNeo4jBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_db_not_found_lists_visible_databases() {
+        let msg = format_db_not_found(
+            "wrongdb",
+            Some(&["neo4j".to_string(), "analytics".to_string()]),
+        );
+        assert!(msg.contains("'wrongdb'"), "{}", msg);
+        assert!(msg.contains("neo4j, analytics"), "{}", msg);
+        assert!(msg.contains("AURA_DATABASE"), "{}", msg);
+
+        let msg = format_db_not_found("wrongdb", Some(&[]));
+        assert!(msg.contains("no databases are visible"), "{}", msg);
+
+        let msg = format_db_not_found("wrongdb", None);
+        assert!(msg.contains("'wrongdb'"), "{}", msg);
+        assert!(msg.contains("usually 'neo4j'"), "{}", msg);
+    }
+
+    /// End-to-end over the wire: a `DatabaseNotFound` on `BEGIN` triggers the
+    /// `SHOW DATABASES` probe, and the probe rows survive the real-server
+    /// framing where RUN gets its own SUCCESS ahead of any RECORD.
+    #[tokio::test]
+    async fn test_db_not_found_error_lists_server_databases() {
+        use crate::bolt::{BoltConfig, BoltUri};
+        use crate::packstream::{decode_message, encode_message, BoltValue as BV};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        async fn read_msg(stream: &mut tokio::net::TcpStream) -> (u8, Vec<BV>) {
+            let mut payload = Vec::new();
+            loop {
+                let mut len = [0u8; 2];
+                stream.read_exact(&mut len).await.unwrap();
+                let n = u16::from_be_bytes(len) as usize;
+                if n == 0 {
+                    break;
+                }
+                let mut chunk = vec![0u8; n];
+                stream.read_exact(&mut chunk).await.unwrap();
+                payload.extend_from_slice(&chunk);
+            }
+            decode_message(&payload).unwrap()
+        }
+
+        async fn send_msg(stream: &mut tokio::net::TcpStream, tag: u8, fields: &[BV]) {
+            let raw = encode_message(tag, fields).unwrap();
+            stream
+                .write_all(&crate::bolt::chunk_message(&raw))
+                .await
+                .unwrap();
+        }
+
+        fn map(pairs: &[(&str, BV)]) -> BV {
+            BV::Map(
+                pairs
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+            )
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut hs = [0u8; 20];
+            stream.read_exact(&mut hs).await.unwrap();
+            stream
+                .write_all(&0x00000404u32.to_be_bytes())
+                .await
+                .unwrap(); // Bolt 4.4
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x01); // HELLO
+            send_msg(
+                &mut stream,
+                0x70,
+                &[map(&[(
+                    "server",
+                    BV::String("Neo4j/5.27-fake".to_string()),
+                )])],
+            )
+            .await;
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x11); // BEGIN {db}
+            send_msg(
+                &mut stream,
+                0x7F,
+                &[map(&[
+                    (
+                        "code",
+                        BV::String("Neo.ClientError.Database.DatabaseNotFound".to_string()),
+                    ),
+                    (
+                        "message",
+                        BV::String("Database wrongdb not found".to_string()),
+                    ),
+                ])],
+            )
+            .await;
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x0F); // RESET after failure
+            send_msg(&mut stream, 0x70, &[map(&[])]).await;
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x10); // RUN SHOW DATABASES
+            send_msg(
+                &mut stream,
+                0x70,
+                &[map(&[(
+                    "fields",
+                    BV::List(vec![BV::String("name".to_string())]),
+                )])],
+            )
+            .await;
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x3F); // PULL
+            send_msg(
+                &mut stream,
+                0x71,
+                &[BV::List(vec![BV::String("neo4j".to_string())])],
+            )
+            .await;
+            send_msg(
+                &mut stream,
+                0x71,
+                &[BV::List(vec![BV::String("system".to_string())])],
+            )
+            .await;
+            send_msg(&mut stream, 0x70, &[map(&[])]).await;
+        });
+
+        let uri = BoltUri::parse(&format!("bolt://127.0.0.1:{}", port)).unwrap();
+        let mut config = BoltConfig::new(uri, "neo4j".to_string(), "test".to_string());
+        config.database = Some("wrongdb".to_string());
+        let backend = BoltBackend::new(config);
+        let err = backend.test_connection().await.expect_err("must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("neo4j, system"), "{}", msg);
+        assert!(msg.contains("AURA_DATABASE"), "{}", msg);
+        server.abort();
+    }
 
     #[test]
     fn test_extract_label() {

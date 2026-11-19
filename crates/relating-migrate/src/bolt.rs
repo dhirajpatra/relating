@@ -294,78 +294,22 @@ impl BoltClient {
         query: &str,
         params: BTreeMap<String, BoltValue>,
     ) -> Result<(Vec<Vec<BoltValue>>, BTreeMap<String, BoltValue>), MigrateError> {
-        let empty = BTreeMap::new();
-        self.send_message(
-            0x10,
-            &[
-                BoltValue::String(query.to_string()),
-                BoltValue::Map(params),
-                BoltValue::Map(empty),
-            ],
-        )
-        .await?;
-
-        let mut pull_extra = BTreeMap::new();
-        pull_extra.insert("n".to_string(), BoltValue::Int(-1));
-        self.send_message(0x3F, &[BoltValue::Map(pull_extra)])
-            .await?;
-
-        let mut rows = Vec::new();
-        loop {
-            let (tag, fields) = self.recv_message().await?;
-            match tag {
-                0x71 => {
-                    // RECORD
-                    match fields.as_slice() {
-                        [BoltValue::List(cols)] => rows.push(cols.clone()),
-                        _ => {
-                            return Err(MigrateError::Protocol(
-                                "Malformed RECORD message".to_string(),
-                            ))
-                        }
-                    }
-                }
-                0x70 => {
-                    // SUCCESS
-                    match fields.as_slice() {
-                        [BoltValue::Map(meta)] => return Ok((rows, meta.clone())),
-                        _ => {
-                            return Err(MigrateError::Protocol(
-                                "Malformed SUCCESS message".to_string(),
-                            ))
-                        }
-                    }
-                }
-                0x7F => {
-                    let (code, message) = failure_details(&fields);
-                    self.reset_after_failure().await;
-                    if code.contains("Unauthorized") || code.contains("Authentication") {
-                        return Err(MigrateError::Auth(message));
-                    }
-                    return Err(MigrateError::Protocol(format!("{}: {}", code, message)));
-                }
-                0x7E => {
-                    return Err(MigrateError::Protocol(
-                        "Server ignored the request (previous failure)".to_string(),
-                    ))
-                }
-                _ => {
-                    return Err(MigrateError::Protocol(format!(
-                        "Unexpected response message {:#04x}",
-                        tag
-                    )))
-                }
-            }
-        }
+        // Delegate to the fields-aware loop: real servers answer the pipelined
+        // RUN with its own SUCCESS (carrying `fields`) before any RECORD, so
+        // returning on the first SUCCESS would drop every row — and the write
+        // stats with them. The shared loop skips the RUN acknowledgement and
+        // returns the final PULL SUCCESS instead.
+        let (_columns, rows, meta) = self.run_records_with_fields_inner(query, params).await?;
+        Ok((rows, meta))
     }
 
     /// RUN + PULL that also returns the result column names.
     ///
-    /// Like [`BoltClient::run`] this pipelines RUN and PULL, then reads every
-    /// response: the RUN SUCCESS (which carries `fields` on real servers) is
-    /// captured and reading continues through RECORDs to the final SUCCESS.
-    /// Proxy mode uses it so Aura results carry the same shaped columns as
-    /// local Relate results. Existing callers of `run` are unaffected.
+    /// This pipelines RUN and PULL, then reads every response: the RUN SUCCESS
+    /// (which carries `fields` on real servers) is captured and reading
+    /// continues through RECORDs to the final SUCCESS. [`BoltClient::run`]
+    /// delegates here and drops the columns, so every read path shares the
+    /// real-server framing.
     pub async fn run_records_with_fields(
         &mut self,
         query: &str,
