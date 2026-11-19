@@ -12,6 +12,8 @@
 #   --fresh           Delete and rebuild the "aura-fill" project from the
 #                     bundled employee CSVs before migrating
 #   --no-build        Skip `docker compose build` (reuse existing images)
+#   --up-only         Start the stack and wait for health, then stop without
+#                     migrating (plain start; use `docker compose down` to stop)
 #   --down            Stop the stack after the migration instead of leaving
 #                     it running
 #   -h, --help        Show this help
@@ -40,6 +42,7 @@ CONNECTION_ID=""
 FRESH=0
 BUILD=1
 DOWN=0
+UP_ONLY=0
 
 usage() {
     cat <<'EOF'
@@ -55,6 +58,8 @@ Options:
   --fresh           Delete and rebuild the "aura-fill" project from the
                     bundled employee CSVs before migrating
   --no-build        Skip `docker compose build` (reuse existing images)
+  --up-only         Start the stack and wait for health, then stop without
+                    migrating (plain start; use `docker compose down` to stop)
   --down            Stop the stack after the migration instead of leaving
                     it running
   -h, --help        Show this help
@@ -71,6 +76,7 @@ while [[ $# -gt 0 ]]; do
             CONNECTION_ID="$2"; shift 2 ;;
         --fresh) FRESH=1; shift ;;
         --no-build) BUILD=0; shift ;;
+        --up-only) UP_ONLY=1; shift ;;
         --down) DOWN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -129,6 +135,13 @@ except Exception:
         exit 1
     fi
 done
+
+if [[ "$UP_ONLY" -eq 1 ]]; then
+    echo "==> Stack is up (--up-only, skipping migration)."
+    echo "    Workbench: http://127.0.0.1:${PORT}"
+    echo "    Stop it later with: docker compose down"
+    exit 0
+fi
 
 echo "==> Running migration flow..."
 export MIGRATE_API="$API" MIGRATE_PROJECT="$PROJECT_ID" MIGRATE_CONNECTION="$CONNECTION_ID" MIGRATE_FRESH="$FRESH"

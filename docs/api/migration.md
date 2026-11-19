@@ -27,7 +27,8 @@ seeds the `aura-fill` demo graph when it is missing (24 employees → 42
 nodes, 72 relationships), then runs the whole workflow below and verifies.
 It aborts before approval when the dry run reports blockers. Options:
 `--project ID`, `--connection CID`, `--fresh` (rebuild the demo graph),
-`--no-build`, `--down` (stop the stack afterwards).
+`--no-build`, `--up-only` (start the stack without migrating),
+`--down` (stop the stack afterwards).
 
 ## Workflow (approval-gated)
 
