@@ -81,18 +81,22 @@ impl BoltBackend {
 /// user; `None` means even that probe failed (for example the server default
 /// database is itself unreachable), so only generic guidance is possible.
 fn format_db_not_found(database: &str, visible: Option<&[String]>) -> String {
+    // Note: Neo4j reports a database the user cannot access the same way as
+    // a database that does not exist, so both causes are named every time.
+    // (Aura database names are not always `neo4j`: verify with
+    // `SHOW DATABASES` in the Aura console.)
     match visible {
         Some(names) if !names.is_empty() => format!(
-            "Database '{}' not found on the target. Databases visible to the configured user: {}. Set AURA_DATABASE to one of these (the Aura instance ID is not a database name).",
+            "Database '{}' not found or not accessible with the configured user. Databases visible to this user: {}. Set AURA_DATABASE to one of these.",
             database,
             names.join(", ")
         ),
         Some(_) => format!(
-            "Database '{}' not found on the target, and no databases are visible to the configured user. Check the database name and that the Bolt user has access to it.",
+            "Database '{}' not found or not accessible, and no databases are visible to the configured user. Check AURA_DATABASE (run SHOW DATABASES in the Aura console) and that the Bolt user (AURA_USERNAME, usually 'neo4j') has access to it.",
             database
         ),
         None => format!(
-            "Database '{}' not found on the target (the instance ID is not a database name; use the database name from the Aura console, usually 'neo4j').",
+            "Database '{}' not found or not accessible. Check AURA_DATABASE against SHOW DATABASES in the Aura console, and that the Bolt user has access to it.",
             database
         ),
     }
@@ -483,7 +487,7 @@ mod tests {
 
         let msg = format_db_not_found("wrongdb", None);
         assert!(msg.contains("'wrongdb'"), "{}", msg);
-        assert!(msg.contains("usually 'neo4j'"), "{}", msg);
+        assert!(msg.contains("SHOW DATABASES"), "{}", msg);
     }
 
     /// End-to-end over the wire: a `DatabaseNotFound` on `BEGIN` triggers the
