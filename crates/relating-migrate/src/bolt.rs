@@ -628,7 +628,11 @@ impl BoltClient {
         // v5 form first on Neo4j 5+ (read from the HELLO agent string),
         // v4 form first everywhere else; the other form is the fallback.
         let v5_first = server_major(&self.server_agent) >= 5;
-        let order = if v5_first { [true, false] } else { [false, true] };
+        let order = if v5_first {
+            [true, false]
+        } else {
+            [false, true]
+        };
         let mut last_err: Option<MigrateError> = None;
         for use_v5 in order {
             let db_value = match (use_v5, database) {
@@ -658,9 +662,8 @@ impl BoltClient {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            MigrateError::Protocol("ROUTE failed with no response".to_string())
-        }))
+        Err(last_err
+            .unwrap_or_else(|| MigrateError::Protocol("ROUTE failed with no response".to_string())))
     }
 
     pub async fn begin(&mut self, database: Option<&str>) -> Result<(), MigrateError> {
@@ -769,10 +772,7 @@ mod tests {
 
         // Bolt 5 nests the same table under `rt`.
         let mut nested = BTreeMap::new();
-        nested.insert(
-            "rt".to_string(),
-            BoltValue::Map(meta.clone()),
-        );
+        nested.insert("rt".to_string(), BoltValue::Map(meta.clone()));
         let table = parse_routing_table(&nested).unwrap();
         assert_eq!(table.writers, vec!["w2:7687".to_string()]);
 
@@ -928,7 +928,10 @@ mod tests {
                         "code",
                         BV::String("Neo.ClientError.Request.Invalid".to_string()),
                     ),
-                    ("message", BV::String("Expected STRING but got MAP".to_string())),
+                    (
+                        "message",
+                        BV::String("Expected STRING but got MAP".to_string()),
+                    ),
                 ])],
             )
             .await;

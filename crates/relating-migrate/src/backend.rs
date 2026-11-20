@@ -237,9 +237,10 @@ impl Neo4jBackend for BoltBackend {
             let db_name = database.clone().unwrap_or_default();
             match client.begin(database.as_deref()).await {
                 Ok(()) => match client.run_records_with_fields(query, params).await {
-                    Ok((columns, rows, _)) => {
-                        client.commit().await.map(|_| QueryRecords { columns, rows })
-                    }
+                    Ok((columns, rows, _)) => client
+                        .commit()
+                        .await
+                        .map(|_| QueryRecords { columns, rows }),
                     Err(e) => {
                         let _ = client.rollback().await;
                         Err(e)

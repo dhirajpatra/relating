@@ -302,10 +302,7 @@ mod tests {
             }
             std::env::set_var("AURA_URI", uri);
             std::env::set_var("AURA_PASSWORD", "test-password");
-            Self {
-                _lock: lock,
-                saved,
-            }
+            Self { _lock: lock, saved }
         }
     }
 
@@ -470,8 +467,7 @@ mod tests {
         let project_b = seed_project(&pool).await;
 
         // Plan-time ensure materializes the env connection for project A.
-        let env_a =
-            relating_core::aura_connection_from_env(&project_a.id).expect("env connection");
+        let env_a = relating_core::aura_connection_from_env(&project_a.id).expect("env connection");
         insert_aura_connection(&pool, &env_a).await.unwrap();
 
         // Project A resolves its stored row.
