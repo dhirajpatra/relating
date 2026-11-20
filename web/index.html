@@ -3,24 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Relating — AI-Native Graph Development Workbench</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%236366f1'/></svg>" />
+    <title>Relating — Graph Development Workbench on Neo4j Aura</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23018bff'/><line x1='9' y1='21' x2='16' y2='12' stroke='white' stroke-width='1.8'/><line x1='16' y1='12' x2='23.5' y2='19' stroke='white' stroke-width='1.8'/><circle cx='9' cy='21' r='3.4' fill='white'/><circle cx='16' cy='12' r='4.2' fill='%230b2237' stroke='white' stroke-width='1.8'/><circle cx='23.5' cy='19' r='3.4' fill='white'/></svg>" />
     <style>
       :root {
-        --bg-primary: #0f172a;
-        --bg-secondary: #1e293b;
-        --bg-card: #1e293b;
-        --bg-hover: #334155;
-        --border-color: #334155;
-        --text-primary: #f8fafc;
-        --text-secondary: #94a3b8;
-        --text-muted: #64748b;
-        --accent: #6366f1;
-        --accent-hover: #4f46e5;
-        --accent-light: #e0e7ff;
-        --success: #10b981;
-        --warning: #f59e0b;
-        --danger: #ef4444;
+        /* Relating Neo4j theme: deep-navy page, Neo4j-blue accent. */
+        --bg-primary: #0b2237;
+        --bg-secondary: #12304e;
+        --bg-card: #12304e;
+        --bg-hover: #1b3f66;
+        --border-color: #24507f;
+        --text-primary: #ffffff;
+        --text-secondary: #b9cadd;
+        --text-muted: #7f95ad;
+        --accent: #018bff;
+        --accent-hover: #006fd6;
+        --accent-light: #6db9ff;
+        --accent-rgb: 1, 139, 255;
+        --success: #2fbf71;
+        --warning: #f5a623;
+        --danger: #f05252;
+        /* White diagram-card surface (dark-navy ink on top). */
+        --hero-card: #ffffff;
+        --hero-ink: #0b2237;
       }
 
       * {
@@ -32,6 +37,10 @@
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
         background-color: var(--bg-primary);
+        background-image:
+          radial-gradient(1100px 480px at 88% -8%, rgba(1, 139, 255, 0.14), transparent 60%),
+          radial-gradient(800px 560px at -12% 108%, rgba(1, 139, 255, 0.09), transparent 60%);
+        background-attachment: fixed;
         color: var(--text-primary);
         line-height: 1.5;
         -webkit-font-smoothing: antialiased;

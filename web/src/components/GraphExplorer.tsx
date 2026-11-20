@@ -81,25 +81,27 @@ export const GraphExplorer: React.FC<GraphExplorerProps> = ({
       elements,
       style: [
         {
+          // Canvas colors mirror the Neo4j theme (CSS vars don't reach
+          // the canvas): Neo4j-blue nodes, pale-blue rims.
           selector: 'node',
           style: {
-            'background-color': '#6366f1',
+            'background-color': '#018bff',
             label: 'data(name)',
-            color: '#f8fafc',
+            color: '#ffffff',
             'font-size': '11px',
             'text-valign': 'bottom',
             'text-margin-y': 6,
             width: 32,
             height: 32,
             'border-width': 2,
-            'border-color': '#a5b4fc',
+            'border-color': '#6db9ff',
           },
         },
         {
           selector: 'node:selected',
           style: {
-            'background-color': '#a855f7',
-            'border-color': '#f8fafc',
+            'background-color': '#006fd6',
+            'border-color': '#ffffff',
             'border-width': 3,
           },
         },
@@ -107,13 +109,13 @@ export const GraphExplorer: React.FC<GraphExplorerProps> = ({
           selector: 'edge',
           style: {
             width: 2,
-            'line-color': '#475569',
-            'target-arrow-color': '#475569',
+            'line-color': '#3d6a99',
+            'target-arrow-color': '#3d6a99',
             'target-arrow-shape': 'triangle',
             'curve-style': 'bezier',
             label: 'data(label)',
             'font-size': '9px',
-            color: '#94a3b8',
+            color: '#7f95ad',
             'text-rotation': 'autorotate',
             'text-margin-y': -8,
           },
@@ -287,7 +289,7 @@ export const GraphExplorer: React.FC<GraphExplorerProps> = ({
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
               <div>
-                <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', backgroundColor: 'rgba(99, 102, 241, 0.2)', color: 'var(--accent-light)', borderRadius: '4px', fontWeight: 600 }}>
+                <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', backgroundColor: 'rgba(var(--accent-rgb), 0.2)', color: 'var(--accent-light)', borderRadius: '4px', fontWeight: 600 }}>
                   :{selectedNode.label}
                 </span>
                 <h4 style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '0.4rem' }}>

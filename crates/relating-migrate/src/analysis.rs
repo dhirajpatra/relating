@@ -34,6 +34,19 @@ fn unreachable_findings(connection_name: &str, reason: String) -> Vec<CompatFind
     }]
 }
 
+fn auth_findings(connection_name: &str, reason: String) -> Vec<CompatFinding> {
+    vec![CompatFinding {
+        category: "target_connection".to_string(),
+        subject: connection_name.to_string(),
+        verdict: crate::compat::CapabilityVerdict::RequiresManualReview,
+        detail: format!("Target rejected the credentials: {}", reason),
+        remediation: Some(
+            "The instance is reachable, but the username/password failed. Use the DBMS user (usually 'neo4j') with the instance password from the Aura console, update AURA_USERNAME/AURA_PASSWORD, then re-run analysis"
+                .to_string(),
+        ),
+    }]
+}
+
 fn backend_for(
     conn: &AuraConnection,
     password_override: Option<String>,
@@ -154,6 +167,11 @@ pub async fn analyze_project_with_options(
                 target_reachable = true;
                 target_agent = Some(info.server_agent.clone());
                 target_findings = analyze_target(&info, conn.uri.contains("+s://"));
+            }
+            // Authentication failures are credential problems on a reachable
+            // target — never label them "unreachable".
+            Err(MigrateError::Auth(reason)) => {
+                target_findings = auth_findings(&conn.name, reason);
             }
             Err(e) => {
                 target_findings = unreachable_findings(&conn.name, e.to_string());

@@ -111,7 +111,7 @@ export const SourceManager: React.FC<SourceManagerProps> = ({
             disabled={uploading}
             style={{
               padding: '0.5rem 0.9rem',
-              backgroundColor: 'rgba(99, 102, 241, 0.1)',
+              backgroundColor: 'rgba(var(--accent-rgb), 0.1)',
               border: '1px solid var(--accent)',
               color: 'var(--accent-light)',
               borderRadius: '6px',

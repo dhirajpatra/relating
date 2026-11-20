@@ -239,7 +239,7 @@ export const OntologyReview: React.FC<OntologyReviewProps> = ({
                       <span style={{ color: 'var(--accent-light)', fontWeight: 600 }}>
                         :{rel.source_label}
                       </span>
-                      <span style={{ color: '#c084fc', fontWeight: 700, fontFamily: 'monospace' }}>
+                      <span style={{ color: 'var(--accent-light)', fontWeight: 700, fontFamily: 'monospace' }}>
                         -[:{rel.rel_type}]-&gt;
                       </span>
                       <span style={{ color: 'var(--accent-light)', fontWeight: 600 }}>

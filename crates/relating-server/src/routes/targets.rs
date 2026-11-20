@@ -5,7 +5,7 @@ use axum::Json;
 use relating_core::ProjectId;
 use relating_graph::QueryTarget;
 use relating_metadata::{
-    get_project as db_get_project, list_aura_connections as db_list_connections,
+    get_project as db_get_project, list_aura_connections_including_env as db_list_connections,
 };
 use serde::Serialize;
 

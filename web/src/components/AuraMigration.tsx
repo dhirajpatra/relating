@@ -23,7 +23,7 @@ const verdictColor = (verdict: CapabilityVerdict): string => {
     case 'TRANSFORM':
       return 'var(--accent-light)';
     case 'REQUIRES_MANUAL_REVIEW':
-      return '#f59e0b';
+      return 'var(--warning)';
     case 'UNSUPPORTED':
       return 'var(--danger)';
     default:
@@ -112,6 +112,27 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
   const [verification, setVerification] = useState<VerificationReport | null>(null);
   const [working, setWorking] = useState(false);
   const [migrationError, setMigrationError] = useState<string | null>(null);
+
+  // The server exposes the `.env` Aura connection (if configured) as a
+  // list entry named like "aura (env)". Its URI/username/database are
+  // known-good, so the new-connection form starts from them instead of
+  // the `neo4j`/`neo4j` guesses (Aura instances often use the instance
+  // id for both, and the guesses fail with an auth error).
+  const envConn = connections.find((c) => c.name.endsWith('(env)'));
+
+  const prefillFromEnv = (conn: AuraConnection) => {
+    setFormUri(conn.uri);
+    setFormUser(conn.username);
+    setFormDb(conn.database ?? 'neo4j');
+    setFormEnv(conn.auth_env_var);
+  };
+
+  const toggleForm = () => {
+    if (!showForm && envConn) {
+      prefillFromEnv(envConn);
+    }
+    setShowForm(!showForm);
+  };
 
   const fetchConnections = async () => {
     try {
@@ -334,7 +355,7 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
         >
           <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Aura Connections</h3>
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={toggleForm}
             style={{
               backgroundColor: 'var(--accent)',
               color: '#fff',
@@ -352,7 +373,13 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
           Passwords are never stored: each connection names an environment variable that
           must hold the password when the server runs (default{' '}
-          <code style={{ fontFamily: 'monospace' }}>AURA_PASSWORD</code>).
+          <code style={{ fontFamily: 'monospace' }}>AURA_PASSWORD</code>). Tip: on Aura the
+          username and database are often the instance id (e.g.{' '}
+          <code style={{ fontFamily: 'monospace' }}>6325161a</code>), not{' '}
+          <code style={{ fontFamily: 'monospace' }}>neo4j</code> — copy them from the Aura
+          console, or use the <code style={{ fontFamily: 'monospace' }}>aura (env)</code>{' '}
+          connection below, which is prefilled from your{' '}
+          <code style={{ fontFamily: 'monospace' }}>.env</code>.
         </p>
 
         {connError && (
@@ -706,7 +733,7 @@ export const AuraMigration: React.FC<AuraMigrationProps> = ({ projectId }) => {
                   selectedMigration?.id === m.id ? 'var(--accent)' : 'var(--border-color)',
                 backgroundColor:
                   selectedMigration?.id === m.id
-                    ? 'rgba(99, 102, 241, 0.2)'
+                    ? 'rgba(var(--accent-rgb), 0.2)'
                     : 'var(--bg-primary)',
                 color:
                   selectedMigration?.id === m.id

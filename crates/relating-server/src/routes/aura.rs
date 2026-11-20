@@ -54,10 +54,6 @@ pub fn build_backend(
     password_override: Option<String>,
 ) -> Result<BoltBackend, AppError> {
     let uri = BoltUri::parse(&conn.uri)?;
-    if uri.is_routing_scheme() {
-        // Direct connection only in R1; cluster routing arrives later.
-        tracing::warn!("neo4j:// routing scheme: connecting directly without cluster routing");
-    }
     let password = match password_override {
         Some(p) => p,
         None => relating_core::resolve_secret(&conn.auth_env_var).map_err(AppError::BadRequest)?,

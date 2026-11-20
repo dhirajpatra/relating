@@ -286,7 +286,7 @@ export const RetrievalWorkbench: React.FC<RetrievalWorkbenchProps> = ({
               border: '1px solid',
               borderColor: strategy === s ? 'var(--accent)' : 'var(--border-color)',
               backgroundColor:
-                strategy === s ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                strategy === s ? 'rgba(var(--accent-rgb), 0.2)' : 'transparent',
               color: strategy === s ? 'var(--accent-light)' : 'var(--text-secondary)',
               textTransform: 'capitalize',
             }}

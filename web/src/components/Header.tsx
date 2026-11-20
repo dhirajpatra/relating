@@ -1,5 +1,7 @@
 import React from 'react';
+import { neo4jTheme } from '../theme/neo4j';
 import { SystemHealth } from '../types';
+import { Neo4jLogo } from './Neo4jLogo';
 
 interface HeaderProps {
   health: SystemHealth | null;
@@ -20,8 +22,8 @@ export const Header: React.FC<HeaderProps> = ({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '1rem 2rem',
-        backgroundColor: 'var(--bg-secondary)',
+        padding: '0.85rem 2rem',
+        backgroundColor: 'var(--bg-primary)',
         borderBottom: '1px solid var(--border-color)',
       }}
     >
@@ -35,28 +37,21 @@ export const Header: React.FC<HeaderProps> = ({
             gap: '0.75rem',
           }}
         >
-          <div
-            style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '8px',
-              background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontWeight: 'bold',
-              fontSize: '1.2rem',
-              color: '#fff',
-            }}
-          >
-            R
-          </div>
+          <Neo4jLogo size={34} />
           <div>
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.025em' }}>
-              Relating
+            <h1
+              style={{
+                fontSize: '1.3rem',
+                fontWeight: 800,
+                letterSpacing: '-0.02em',
+                color: '#fff',
+                lineHeight: 1.1,
+              }}
+            >
+              relating
             </h1>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Graph Development & GraphRAG Workbench
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+              Graph Development Workbench on Neo4j Aura
             </p>
           </div>
         </div>
@@ -69,7 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
                 fontSize: '0.9rem',
                 fontWeight: 600,
                 color: 'var(--accent-light)',
-                backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                backgroundColor: neo4jTheme.accentSoft(0.15),
                 padding: '0.2rem 0.6rem',
                 borderRadius: '4px',
               }}

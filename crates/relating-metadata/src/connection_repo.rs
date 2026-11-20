@@ -114,7 +114,15 @@ pub async fn get_aura_connection_resolving_env(
     id: &AuraConnectionId,
 ) -> Result<Option<AuraConnection>, RelatingError> {
     if let Some(conn) = get_aura_connection(pool, id).await? {
-        return Ok(Some(conn));
+        // A stored row belongs to exactly one project. The `.env` connection
+        // has one stable id for every project, so once migration planning
+        // materializes it for project A, projects B, C, ... must NOT resolve
+        // A's row here (their proxy calls would fail the project check with
+        // "Connection not found" while test/analyze silently used A's row).
+        // Other projects fall through to their own transient env connection.
+        if conn.project_id == *project_id {
+            return Ok(Some(conn));
+        }
     }
     Ok(relating_core::aura_connection_from_env(project_id).filter(|env| &env.id == id))
 }
@@ -264,6 +272,53 @@ mod tests {
     use crate::migration_repo::insert_migration;
     use crate::project_repo::insert_project;
     use relating_core::{AiProviderConfig, Migration, MigrationId, MigrationStatus, Project};
+    use std::sync::Mutex;
+
+    // Process env is global; serialize the tests that mutate AURA_*.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct AuraEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(String, Option<String>)>,
+    }
+
+    impl AuraEnvGuard {
+        fn set(uri: &str) -> Self {
+            let lock = ENV_LOCK.lock().unwrap();
+            let saved: Vec<(String, Option<String>)> = [
+                "AURA_URI",
+                "AURA_USERNAME",
+                "AURA_DATABASE",
+                "AURA_NAME",
+                "AURA_PASSWORD",
+                "AURA_PASSWORD_FILE",
+                "RELATING_SECRET_BACKEND",
+            ]
+            .iter()
+            .map(|n| (n.to_string(), std::env::var(n).ok()))
+            .collect();
+            for (name, _) in &saved {
+                std::env::remove_var(name);
+            }
+            std::env::set_var("AURA_URI", uri);
+            std::env::set_var("AURA_PASSWORD", "test-password");
+            Self {
+                _lock: lock,
+                saved,
+            }
+        }
+    }
+
+    impl Drop for AuraEnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
 
     async fn seed_project(pool: &SqlitePool) -> Project {
         let now = Utc::now();
@@ -354,7 +409,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_refreshes_env_managed_row_on_drift() {
-        // Only test in this binary touching AURA_*; no serial guard needed.
+        // Shares process env with the test below; serialized via ENV_LOCK.
+        let _serial = ENV_LOCK.lock().unwrap();
         let saved: Vec<(String, Option<String>)> = [
             "AURA_URI",
             "AURA_USERNAME",
@@ -403,5 +459,37 @@ mod tests {
             }
         }
         outcome
+    }
+
+    #[tokio::test]
+    async fn test_resolving_env_does_not_leak_across_projects() {
+        let _env = AuraEnvGuard::set("neo4j+s://xscope.databases.neo4j.io");
+
+        let pool = init_in_memory_db().await.unwrap();
+        let project_a = seed_project(&pool).await;
+        let project_b = seed_project(&pool).await;
+
+        // Plan-time ensure materializes the env connection for project A.
+        let env_a =
+            relating_core::aura_connection_from_env(&project_a.id).expect("env connection");
+        insert_aura_connection(&pool, &env_a).await.unwrap();
+
+        // Project A resolves its stored row.
+        let got_a = get_aura_connection_resolving_env(&pool, &project_a.id, &env_a.id)
+            .await
+            .unwrap()
+            .expect("project A resolves");
+        assert_eq!(got_a.project_id, project_a.id);
+
+        // Project B resolves its OWN transient env connection (same stable
+        // id, its own project) — never A's stored row. Before the
+        // project-scoped fix this returned A's row, and proxy calls from B
+        // failed the project check with "Connection not found".
+        let got_b = get_aura_connection_resolving_env(&pool, &project_b.id, &env_a.id)
+            .await
+            .unwrap()
+            .expect("project B resolves");
+        assert_eq!(got_b.id, env_a.id);
+        assert_eq!(got_b.project_id, project_b.id);
     }
 }

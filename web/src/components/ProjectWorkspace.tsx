@@ -443,7 +443,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId, o
                 backgroundColor: 'var(--bg-primary)',
                 border: '1px solid var(--border-color)',
                 borderRadius: '6px',
-                color: '#38bdf8',
+                color: 'var(--accent-light)',
                 fontFamily: 'monospace',
                 fontSize: '0.9rem',
                 lineHeight: 1.4,

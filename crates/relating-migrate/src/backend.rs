@@ -227,12 +227,35 @@ impl Neo4jBackend for BoltBackend {
     ) -> Result<QueryRecords, MigrateError> {
         let mut guard = self.client.lock().await;
         self.ensure_connected(&mut guard).await?;
-        let result = guard
-            .as_mut()
-            .expect("client just connected")
-            .run_records_with_fields(query, params)
-            .await
-            .map(|(columns, rows, _)| QueryRecords { columns, rows });
+        let client = guard.as_mut().expect("client just connected");
+        // Mirror run_read: with a database configured, proxy reads must
+        // select it too, otherwise they silently hit the server default
+        // database (wrong results on multi-database servers, and confusing
+        // DatabaseNotFound-free "empty" answers on Aura).
+        let result = if self.config.database.is_some() {
+            let database = self.config.database.clone();
+            let db_name = database.clone().unwrap_or_default();
+            match client.begin(database.as_deref()).await {
+                Ok(()) => match client.run_records_with_fields(query, params).await {
+                    Ok((columns, rows, _)) => {
+                        client.commit().await.map(|_| QueryRecords { columns, rows })
+                    }
+                    Err(e) => {
+                        let _ = client.rollback().await;
+                        Err(e)
+                    }
+                },
+                Err(e) if e.to_string().contains("DatabaseNotFound") => {
+                    Err(db_not_found_error(client, &db_name).await)
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            client
+                .run_records_with_fields(query, params)
+                .await
+                .map(|(columns, rows, _)| QueryRecords { columns, rows })
+        };
         if matches!(
             result,
             Err(MigrateError::Connection(_)) | Err(MigrateError::Protocol(_))
@@ -615,6 +638,120 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("neo4j, system"), "{}", msg);
         assert!(msg.contains("AURA_DATABASE"), "{}", msg);
+        server.abort();
+    }
+
+    /// `run_query` (the Cypher proxy path) must open an explicit
+    /// transaction against the configured database, exactly like `run_read`
+    /// and `run_write`, or proxy reads silently hit the server default.
+    #[tokio::test]
+    async fn test_run_query_selects_configured_database() {
+        use crate::bolt::{BoltConfig, BoltUri};
+        use crate::packstream::{decode_message, encode_message, BoltValue as BV};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        async fn read_msg(stream: &mut tokio::net::TcpStream) -> (u8, Vec<BV>) {
+            let mut payload = Vec::new();
+            loop {
+                let mut len = [0u8; 2];
+                stream.read_exact(&mut len).await.unwrap();
+                let n = u16::from_be_bytes(len) as usize;
+                if n == 0 {
+                    break;
+                }
+                let mut chunk = vec![0u8; n];
+                stream.read_exact(&mut chunk).await.unwrap();
+                payload.extend_from_slice(&chunk);
+            }
+            decode_message(&payload).unwrap()
+        }
+
+        async fn send_msg(stream: &mut tokio::net::TcpStream, tag: u8, fields: &[BV]) {
+            let raw = encode_message(tag, fields).unwrap();
+            stream
+                .write_all(&crate::bolt::chunk_message(&raw))
+                .await
+                .unwrap();
+        }
+
+        fn map(pairs: &[(&str, BV)]) -> BV {
+            BV::Map(
+                pairs
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+            )
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut hs = [0u8; 20];
+            stream.read_exact(&mut hs).await.unwrap();
+            stream
+                .write_all(&0x00000404u32.to_be_bytes())
+                .await
+                .unwrap(); // Bolt 4.4
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x01); // HELLO
+            send_msg(
+                &mut stream,
+                0x70,
+                &[map(&[(
+                    "server",
+                    BV::String("Neo4j/5.27-fake".to_string()),
+                )])],
+            )
+            .await;
+
+            // BEGIN must carry the configured database.
+            let (tag, fields) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x11);
+            match fields.as_slice() {
+                [BV::Map(extra)] => assert_eq!(
+                    extra.get("db").and_then(|v| v.as_str()),
+                    Some("analytics"),
+                    "BEGIN must select the configured database"
+                ),
+                other => panic!("BEGIN must carry an extras map, got {:?}", other),
+            }
+            send_msg(&mut stream, 0x70, &[map(&[])]).await;
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x10); // RUN
+            send_msg(
+                &mut stream,
+                0x70,
+                &[map(&[(
+                    "fields",
+                    BV::List(vec![BV::String("one".to_string())]),
+                )])],
+            )
+            .await;
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x3F); // PULL
+            send_msg(&mut stream, 0x71, &[BV::List(vec![BV::Int(1)])]).await;
+            send_msg(&mut stream, 0x70, &[map(&[])]).await;
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x12); // COMMIT
+            send_msg(&mut stream, 0x70, &[map(&[])]).await;
+        });
+
+        let uri = BoltUri::parse(&format!("bolt://127.0.0.1:{}", port)).unwrap();
+        let mut config = BoltConfig::new(uri, "neo4j".to_string(), "test".to_string());
+        config.database = Some("analytics".to_string());
+        let backend = BoltBackend::new(config);
+        let records = backend
+            .run_query("RETURN 1 AS one", BTreeMap::new())
+            .await
+            .expect("run_query must succeed");
+        assert_eq!(records.columns, vec!["one".to_string()]);
+        assert_eq!(records.rows, vec![vec![BV::Int(1)]]);
         server.abort();
     }
 

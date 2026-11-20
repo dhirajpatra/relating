@@ -473,7 +473,7 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
                       style={{
                         fontSize: '0.7rem',
                         fontWeight: 700,
-                        color: f.severity === 'warning' ? '#f59e0b' : 'var(--success)',
+                        color: f.severity === 'warning' ? 'var(--warning)' : 'var(--success)',
                         marginRight: '0.4rem',
                       }}
                     >
@@ -502,7 +502,7 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
                     style={{
                       fontSize: '0.7rem',
                       fontWeight: 700,
-                      color: s.severity === 'warning' ? '#f59e0b' : 'var(--success)',
+                      color: s.severity === 'warning' ? 'var(--warning)' : 'var(--success)',
                       marginRight: '0.4rem',
                     }}
                   >
@@ -531,7 +531,7 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
                 </div>
               ))}
               {advisorResult.sizing.caveats.map((c, i) => (
-                <div key={i} style={{ fontSize: '0.75rem', color: '#f59e0b' }}>
+                <div key={i} style={{ fontSize: '0.75rem', color: 'var(--warning)' }}>
                   caveat: {c}
                 </div>
               ))}
@@ -555,7 +555,7 @@ export const SynthAdvisorWorkbench: React.FC<SynthAdvisorWorkbenchProps> = ({
                               ? 'var(--success)'
                               : f.verdict === 'UNSUPPORTED'
                                 ? 'var(--danger)'
-                                : '#f59e0b',
+                                : 'var(--warning)',
                         }}
                       >
                         {f.verdict}

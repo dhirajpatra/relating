@@ -17,7 +17,7 @@ const verdictColor = (verdict: CompareVerdict): string => {
       return 'var(--success)';
     case 'STRUCTURE_DIFF':
     case 'COUNT_DIFF':
-      return '#f59e0b';
+      return 'var(--warning)';
     case 'ERROR_DIFF':
       return 'var(--danger)';
     default:
@@ -215,7 +215,7 @@ export const ShadowDebugWorkbench: React.FC<ShadowDebugWorkbenchProps> = ({
                     shadowResult.report.summary.confidence === 'HIGH'
                       ? 'var(--success)'
                       : shadowResult.report.summary.confidence === 'MEDIUM'
-                        ? '#f59e0b'
+                        ? 'var(--warning)'
                         : 'var(--danger)',
                 }}
               >
@@ -364,7 +364,7 @@ export const ShadowDebugWorkbench: React.FC<ShadowDebugWorkbenchProps> = ({
                       style={{
                         fontSize: '0.7rem',
                         fontWeight: 700,
-                        color: r.severity === 'warning' ? '#f59e0b' : 'var(--success)',
+                        color: r.severity === 'warning' ? 'var(--warning)' : 'var(--success)',
                         marginRight: '0.4rem',
                       }}
                     >

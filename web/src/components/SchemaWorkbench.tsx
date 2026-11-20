@@ -243,7 +243,7 @@ export const SchemaWorkbench: React.FC<SchemaWorkbenchProps> = ({ projectId }) =
                 border: '1px solid',
                 borderColor: selectedFile === f.path ? 'var(--accent)' : 'var(--border-color)',
                 backgroundColor:
-                  selectedFile === f.path ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                  selectedFile === f.path ? 'rgba(var(--accent-rgb), 0.2)' : 'transparent',
                 color: selectedFile === f.path ? 'var(--accent-light)' : 'var(--text-secondary)',
               }}
             >

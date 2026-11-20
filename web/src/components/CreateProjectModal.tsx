@@ -238,7 +238,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                     borderRadius: '4px',
                     border: '1px solid',
                     borderColor: providerType === t ? 'var(--accent)' : 'var(--border-color)',
-                    backgroundColor: providerType === t ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                    backgroundColor: providerType === t ? 'rgba(var(--accent-rgb), 0.2)' : 'transparent',
                     color: providerType === t ? 'var(--accent-light)' : 'var(--text-secondary)',
                     textTransform: 'capitalize',
                   }}

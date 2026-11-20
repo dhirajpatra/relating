@@ -83,8 +83,9 @@ same checks headlessly via `vectors` + `aura_tier` (see `advisor.md`).
 
 ## Limits (stated, not silent)
 
-- `neo4j://` URIs connect directly; cluster routing is not implemented (works
-  for single-instance Aura; use the direct address for clusters).
+- `neo4j://` URIs follow Bolt routing (ROUTE → writer) like official
+  drivers, falling back to the direct connection when the target answers
+  no routing table. `bolt://` URIs always connect directly.
 - `+ssc` (self-signed) URIs are rejected; use trusted certificates.
 - Execution runs inside the request in R1; very large graphs should be
   migrated in planned batches and resumed if interrupted.

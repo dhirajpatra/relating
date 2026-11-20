@@ -17,6 +17,8 @@ use tokio::sync::Mutex;
 pub struct FakeState {
     pub nodes: HashMap<String, HashMap<String, serde_json::Value>>,
     pub rel_counts: HashMap<String, u64>,
+    pub port: u16,
+    pub route_calls: u64,
 }
 
 fn fake_label(query: &str) -> Option<String> {
@@ -279,6 +281,37 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
                     break;
                 }
             }
+            0x66 => {
+                // ROUTE: answer with a table pointing back at this fake so
+                // routing-scheme clients prove the follow-the-table hop.
+                let db = match fields.get(2) {
+                    Some(BoltValue::String(db)) => db.clone(),
+                    _ => "neo4j".to_string(),
+                };
+                let port = {
+                    let mut guard = state.lock().await;
+                    guard.route_calls += 1;
+                    guard.port
+                };
+                let here = format!("127.0.0.1:{}", port);
+                let mut table = BTreeMap::new();
+                table.insert("ttl".to_string(), BoltValue::Int(300));
+                table.insert("db".to_string(), BoltValue::String(db));
+                let mut servers = Vec::new();
+                for role in ["WRITE", "READ", "ROUTE"] {
+                    let mut entry = BTreeMap::new();
+                    entry.insert("role".to_string(), BoltValue::String(role.to_string()));
+                    entry.insert(
+                        "addresses".to_string(),
+                        BoltValue::List(vec![BoltValue::String(here.clone())]),
+                    );
+                    servers.push(BoltValue::Map(entry));
+                }
+                table.insert("servers".to_string(), BoltValue::List(servers));
+                if !send_message(&mut stream, 0x70, &[BoltValue::Map(table)]).await {
+                    break;
+                }
+            }
             0x0F => {
                 // RESET after a failure.
                 if !send_success(&mut stream, vec![]).await {
@@ -294,7 +327,10 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
 pub async fn start_fake_bolt() -> (String, tokio::task::JoinHandle<()>, Arc<Mutex<FakeState>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let state = Arc::new(Mutex::new(FakeState::default()));
+    let state = Arc::new(Mutex::new(FakeState {
+        port,
+        ..FakeState::default()
+    }));
     let task_state = state.clone();
     let handle = tokio::spawn(async move {
         loop {

@@ -5,6 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tracing::warn;
 
 const HANDSHAKE_MAGIC: [u8; 4] = [0x60, 0x60, 0xB0, 0x17];
 const MAX_CHUNK_LEN: usize = 16384;
@@ -174,8 +175,144 @@ fn version_to_u32(major: u8, minor: u8) -> u32 {
     ((minor as u32) << 8) | major as u32
 }
 
+/// Parsed Bolt routing table (v4 top-level shape and v5 `rt`-nested shape).
+#[derive(Debug, Clone, Default)]
+pub struct RoutingTable {
+    pub ttl_secs: u64,
+    pub database: Option<String>,
+    pub writers: Vec<String>,
+    pub readers: Vec<String>,
+    pub routers: Vec<String>,
+}
+
+fn parse_routing_table(meta: &BTreeMap<String, BoltValue>) -> Result<RoutingTable, MigrateError> {
+    let malformed = || MigrateError::Protocol("Malformed ROUTE response".to_string());
+    // Bolt 4.x serves the table at top level; Bolt 5 nests it under `rt`.
+    let meta = match meta.get("servers") {
+        Some(_) => meta,
+        None => match meta.get("rt") {
+            Some(BoltValue::Map(rt)) => rt,
+            _ => return Err(malformed()),
+        },
+    };
+    let ttl_secs = meta
+        .get("ttl")
+        .and_then(|v| v.as_int())
+        .unwrap_or(300)
+        .max(0) as u64;
+    let database = meta
+        .get("db")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let servers = match meta.get("servers") {
+        Some(BoltValue::List(servers)) => servers,
+        _ => return Err(malformed()),
+    };
+    let mut table = RoutingTable {
+        ttl_secs,
+        database,
+        ..Default::default()
+    };
+    for server in servers {
+        let entry = match server {
+            BoltValue::Map(entry) => entry,
+            _ => continue,
+        };
+        let role = entry
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        let addresses: Vec<String> = match entry.get("addresses") {
+            Some(BoltValue::List(addresses)) => addresses
+                .iter()
+                .filter_map(|a| a.as_str().map(|s| s.to_string()))
+                .collect(),
+            _ => Vec::new(),
+        };
+        // v4 uses WRITE/READ/ROUTE; accept the v5 WRITER/READER/ROUTER
+        // spellings too so one parser serves every server we meet.
+        match role.as_str() {
+            "WRITE" | "WRITER" => table.writers.extend(addresses),
+            "READ" | "READER" => table.readers.extend(addresses),
+            "ROUTE" | "ROUTER" => table.routers.extend(addresses),
+            _ => {}
+        }
+    }
+    Ok(table)
+}
+
+/// Major version from a Bolt HELLO `server` agent string such as
+/// `Neo4j/5.27-aura`. Unknown shapes yield 0 (oldest behavior first).
+fn server_major(agent: &str) -> u64 {
+    agent
+        .split('/')
+        .nth(1)
+        .and_then(|v| v.split('.').next())
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(0)
+}
+
+fn parse_host_port(address: &str) -> (String, u16) {
+    match address.rsplit_once(':') {
+        Some((host, port)) => match port.parse::<u16>() {
+            Ok(port) => (host.to_string(), port),
+            Err(_) => (address.to_string(), DEFAULT_PORT),
+        },
+        None => (address.to_string(), DEFAULT_PORT),
+    }
+}
+
 impl BoltClient {
     pub async fn connect(config: &BoltConfig) -> Result<Self, MigrateError> {
+        let mut client = Self::connect_direct(config).await?;
+        if !config.uri.is_routing_scheme() {
+            return Ok(client);
+        }
+        // neo4j:// URIs follow cluster routing like official drivers. The
+        // front door of multi-tenant/clustered Aura does not host user
+        // databases itself, so a bare direct connection fails later with
+        // DatabaseNotFound; ROUTE reveals the member to talk to instead.
+        let table = match client
+            .route(&config.uri.host, config.database.as_deref())
+            .await
+        {
+            Ok(table) => table,
+            Err(e) => {
+                warn!(
+                    "ROUTE discovery failed ({}); continuing with a direct connection",
+                    e
+                );
+                return Ok(client);
+            }
+        };
+        let Some(target) = table
+            .writers
+            .first()
+            .or_else(|| table.readers.first())
+            .cloned()
+        else {
+            warn!("ROUTE table has no writers or readers; continuing with a direct connection");
+            return Ok(client);
+        };
+        let (host, port) = parse_host_port(&target);
+        let mut routed = config.clone();
+        // One hop only: writer addresses use the direct scheme, which never
+        // routes again. TLS follows the original URI.
+        routed.uri = BoltUri {
+            scheme: if config.uri.use_tls {
+                "bolt+s".to_string()
+            } else {
+                "bolt".to_string()
+            },
+            host,
+            port,
+            use_tls: config.uri.use_tls,
+        };
+        Self::connect_direct(&routed).await
+    }
+
+    async fn connect_direct(config: &BoltConfig) -> Result<Self, MigrateError> {
         let addr = format!("{}:{}", config.uri.host, config.uri.port);
         let tcp = tokio::time::timeout(config.connect_timeout, TcpStream::connect(&addr))
             .await
@@ -462,6 +599,70 @@ impl BoltClient {
         }
     }
 
+    /// ROUTE request (three-field form): routing context with the
+    /// originally requested address, bookmarks, and database.
+    ///
+    /// Neo4j 4.x wants the database as a bare string (`ROUTE(ctx, [], "db")`)
+    /// while Neo4j 5.x servers reject that with
+    /// `Expected MAP but got STRING` and want a database-context map
+    /// (`ROUTE(ctx, [], {db: "db"})`) — even on a Bolt 4.4 connection. A
+    /// failed ROUTE used to mean "fall back to a direct connection", which
+    /// lands on arbitrary front-door nodes that may not host the database,
+    /// surfacing as intermittent `DatabaseNotFound`. So the client tries the
+    /// form matching the server's major version first, then the other form;
+    /// only when both fail does the caller fall back to direct. Each attempt
+    /// is self-cleaning (`exchange` RESETs after FAILURE).
+    pub async fn route(
+        &mut self,
+        address: &str,
+        database: Option<&str>,
+    ) -> Result<RoutingTable, MigrateError> {
+        let mut context = BTreeMap::new();
+        context.insert(
+            "address".to_string(),
+            BoltValue::String(address.to_string()),
+        );
+        let context = BoltValue::Map(context);
+        let bookmarks = BoltValue::List(Vec::new());
+
+        // v5 form first on Neo4j 5+ (read from the HELLO agent string),
+        // v4 form first everywhere else; the other form is the fallback.
+        let v5_first = server_major(&self.server_agent) >= 5;
+        let order = if v5_first { [true, false] } else { [false, true] };
+        let mut last_err: Option<MigrateError> = None;
+        for use_v5 in order {
+            let db_value = match (use_v5, database) {
+                (true, Some(db)) => BoltValue::Map(BTreeMap::from([(
+                    "db".to_string(),
+                    BoltValue::String(db.to_string()),
+                )])),
+                (true, None) => BoltValue::Map(BTreeMap::new()),
+                (false, Some(db)) => BoltValue::String(db.to_string()),
+                (false, None) => BoltValue::Null,
+            };
+            match self
+                .exchange(0x66, &[context.clone(), bookmarks.clone(), db_value])
+                .await
+            {
+                Ok(meta) => {
+                    tracing::debug!(
+                        "ROUTE (v5form={}) SUCCESS keys: {:?}",
+                        use_v5,
+                        meta.keys().collect::<Vec<_>>()
+                    );
+                    return parse_routing_table(&meta);
+                }
+                Err(e) => {
+                    tracing::debug!("ROUTE (v5form={}) failed: {}", use_v5, e);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            MigrateError::Protocol("ROUTE failed with no response".to_string())
+        }))
+    }
+
     pub async fn begin(&mut self, database: Option<&str>) -> Result<(), MigrateError> {
         let mut extra = BTreeMap::new();
         if let Some(db) = database {
@@ -525,6 +726,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_routing_table_roles() {
+        use std::collections::BTreeMap;
+        let mut meta = BTreeMap::new();
+        meta.insert("ttl".to_string(), BoltValue::Int(300));
+        meta.insert("db".to_string(), BoltValue::String("neo4j".to_string()));
+        let entry = |role: &str, addresses: Vec<&str>| {
+            let mut map = BTreeMap::new();
+            map.insert("role".to_string(), BoltValue::String(role.to_string()));
+            map.insert(
+                "addresses".to_string(),
+                BoltValue::List(
+                    addresses
+                        .into_iter()
+                        .map(|a| BoltValue::String(a.to_string()))
+                        .collect(),
+                ),
+            );
+            BoltValue::Map(map)
+        };
+        meta.insert(
+            "servers".to_string(),
+            BoltValue::List(vec![
+                entry("WRITE", vec!["w1:7687"]),
+                entry("READ", vec!["r1:7687", "r2:7687"]),
+                entry("ROUTE", vec!["rt1:7687"]),
+            ]),
+        );
+        let table = parse_routing_table(&meta).unwrap();
+        assert_eq!(table.ttl_secs, 300);
+        assert_eq!(table.database.as_deref(), Some("neo4j"));
+        assert_eq!(table.writers, vec!["w1:7687".to_string()]);
+        assert_eq!(table.readers.len(), 2);
+        assert_eq!(table.routers, vec!["rt1:7687".to_string()]);
+
+        // v5 role spellings are accepted too.
+        if let BoltValue::List(servers) = meta.get_mut("servers").unwrap() {
+            *servers = vec![entry("WRITER", vec!["w2:7687"])];
+        }
+        let table = parse_routing_table(&meta).unwrap();
+        assert_eq!(table.writers, vec!["w2:7687".to_string()]);
+
+        // Bolt 5 nests the same table under `rt`.
+        let mut nested = BTreeMap::new();
+        nested.insert(
+            "rt".to_string(),
+            BoltValue::Map(meta.clone()),
+        );
+        let table = parse_routing_table(&nested).unwrap();
+        assert_eq!(table.writers, vec!["w2:7687".to_string()]);
+
+        // Missing server list is malformed.
+        meta.remove("servers");
+        assert!(parse_routing_table(&meta).is_err());
+    }
+
+    #[test]
+    fn test_parse_host_port() {
+        assert_eq!(
+            parse_host_port("db.example.com:7687"),
+            ("db.example.com".to_string(), 7687)
+        );
+        assert_eq!(
+            parse_host_port("db.example.com"),
+            ("db.example.com".to_string(), 7687)
+        );
+        assert_eq!(
+            parse_host_port("127.0.0.1:notaport"),
+            ("127.0.0.1:notaport".to_string(), 7687)
+        );
+    }
+
+    #[test]
     fn test_bolt_uri_parse() {
         let uri = BoltUri::parse("neo4j+s://abc.databases.neo4j.io:7687").unwrap();
         assert_eq!(uri.scheme, "neo4j+s");
@@ -562,6 +835,141 @@ mod tests {
         let framed = chunk_message(&big);
         assert_eq!(&framed[0..2], &[0x40, 0x00]);
         assert!(framed.ends_with(&[0x00, 0x00]));
+    }
+
+    #[test]
+    fn test_server_major() {
+        assert_eq!(server_major("Neo4j/5.27-aura"), 5);
+        assert_eq!(server_major("Neo4j/4.4.0"), 4);
+        assert_eq!(server_major(""), 0);
+        assert_eq!(server_major("not-a-version"), 0);
+    }
+
+    /// ROUTE tries the server-version form first, then falls back to the
+    /// other form on the same connection: the fake 5.x server rejects the
+    /// v5 map form and the client still routes via the v4 string form.
+    #[tokio::test]
+    async fn test_route_falls_back_to_other_form() {
+        use crate::packstream::{decode_message, encode_message, BoltValue as BV};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        async fn read_msg(stream: &mut tokio::net::TcpStream) -> (u8, Vec<BV>) {
+            let mut payload = Vec::new();
+            loop {
+                let mut len = [0u8; 2];
+                stream.read_exact(&mut len).await.unwrap();
+                let n = u16::from_be_bytes(len) as usize;
+                if n == 0 {
+                    break;
+                }
+                let mut chunk = vec![0u8; n];
+                stream.read_exact(&mut chunk).await.unwrap();
+                payload.extend_from_slice(&chunk);
+            }
+            decode_message(&payload).unwrap()
+        }
+
+        async fn send_msg(stream: &mut tokio::net::TcpStream, tag: u8, fields: &[BV]) {
+            let raw = encode_message(tag, fields).unwrap();
+            stream
+                .write_all(&crate::bolt::chunk_message(&raw))
+                .await
+                .unwrap();
+        }
+
+        fn map(pairs: &[(&str, BV)]) -> BV {
+            BV::Map(
+                pairs
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+            )
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut hs = [0u8; 20];
+            stream.read_exact(&mut hs).await.unwrap();
+            stream
+                .write_all(&0x00000404u32.to_be_bytes())
+                .await
+                .unwrap(); // Bolt 4.4
+
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x01); // HELLO
+            send_msg(
+                &mut stream,
+                0x70,
+                &[map(&[(
+                    "server",
+                    BV::String("Neo4j/5.27-fake".to_string()),
+                )])],
+            )
+            .await;
+
+            // First ROUTE: v5 form first on a 5.x agent (db as a map).
+            let (tag, fields) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x66);
+            match fields.as_slice() {
+                [BV::Map(_), BV::List(_), BV::Map(db)] => {
+                    assert_eq!(db.get("db").and_then(|v| v.as_str()), Some("mydb"));
+                }
+                other => panic!("first ROUTE must use the v5 map form, got {:?}", other),
+            }
+            // Reject it like a server that only speaks the v4 form.
+            send_msg(
+                &mut stream,
+                0x7F,
+                &[map(&[
+                    (
+                        "code",
+                        BV::String("Neo.ClientError.Request.Invalid".to_string()),
+                    ),
+                    ("message", BV::String("Expected STRING but got MAP".to_string())),
+                ])],
+            )
+            .await;
+            let (tag, _) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x0F); // RESET after failure
+            send_msg(&mut stream, 0x70, &[map(&[])]).await;
+
+            // Second ROUTE: v4 fallback (db as a bare string) succeeds.
+            let (tag, fields) = read_msg(&mut stream).await;
+            assert_eq!(tag, 0x66);
+            match fields.as_slice() {
+                [BV::Map(_), BV::List(_), BV::String(db)] => assert_eq!(db, "mydb"),
+                other => panic!("second ROUTE must use the v4 string form, got {:?}", other),
+            }
+            let mut writer = BTreeMap::new();
+            writer.insert("role".to_string(), BV::String("WRITE".to_string()));
+            writer.insert(
+                "addresses".to_string(),
+                BV::List(vec![BV::String("w1:7687".to_string())]),
+            );
+            send_msg(
+                &mut stream,
+                0x70,
+                &[map(&[
+                    ("ttl", BV::Int(300)),
+                    ("db", BV::String("mydb".to_string())),
+                    ("servers", BV::List(vec![BV::Map(writer)])),
+                ])],
+            )
+            .await;
+        });
+
+        let uri = BoltUri::parse(&format!("bolt://127.0.0.1:{}", port)).unwrap();
+        let config = BoltConfig::new(uri, "neo4j".to_string(), "test".to_string());
+        let mut client = BoltClient::connect(&config).await.unwrap();
+        let table = client
+            .route("frontdoor:7687", Some("mydb"))
+            .await
+            .expect("ROUTE fallback must succeed");
+        assert_eq!(table.writers, vec!["w1:7687".to_string()]);
+        server.abort();
     }
 
     #[test]

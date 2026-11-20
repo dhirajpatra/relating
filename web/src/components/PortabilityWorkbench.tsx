@@ -218,7 +218,7 @@ export const PortabilityWorkbench: React.FC<PortabilityWorkbenchProps> = ({
                       border: '1px solid',
                       borderColor: verdictFilter === v ? 'var(--accent)' : 'var(--border-color)',
                       backgroundColor:
-                        verdictFilter === v ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                        verdictFilter === v ? 'rgba(var(--accent-rgb), 0.2)' : 'transparent',
                       color:
                         verdictFilter === v ? 'var(--accent-light)' : 'var(--text-secondary)',
                     }}

@@ -1,5 +1,8 @@
 import React from 'react';
+import { neo4jTheme } from '../theme/neo4j';
 import { ProjectSummary } from '../types';
+import { ArchitectureHero } from './ArchitectureHero';
+import { Neo4jLogo } from './Neo4jLogo';
 
 interface ProjectListProps {
   projects: ProjectSummary[];
@@ -26,59 +29,58 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
   if (projects.length === 0) {
     return (
-      <div
-        style={{
-          textAlign: 'center',
-          padding: '5rem 2rem',
-          backgroundColor: 'var(--bg-secondary)',
-          borderRadius: '12px',
-          border: '1px dashed var(--border-color)',
-          maxWidth: '600px',
-          margin: '3rem auto',
-        }}
-      >
+      <div style={{ maxWidth: '1200px', margin: '2rem auto', padding: '0 1.5rem' }}>
+        <ArchitectureHero />
         <div
           style={{
-            fontSize: '2.5rem',
-            marginBottom: '1rem',
+            textAlign: 'center',
+            padding: '3rem 2rem',
+            backgroundColor: 'var(--bg-secondary)',
+            borderRadius: '12px',
+            border: '1px dashed var(--border-color)',
+            maxWidth: '600px',
+            margin: '0 auto',
           }}
         >
-          🕸️
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
+            <Neo4jLogo size={44} />
+          </div>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+            No graph projects yet
+          </h3>
+          <p
+            style={{
+              color: 'var(--text-muted)',
+              fontSize: '0.9rem',
+              maxWidth: '400px',
+              margin: '0 auto 1.5rem',
+            }}
+          >
+            Create an isolated graph project backed by an embedded Relate database and AI services
+            to get started.
+          </p>
+          <button
+            onClick={onNewProject}
+            style={{
+              backgroundColor: 'var(--accent)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '0.6rem 1.25rem',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+            }}
+          >
+            + Create First Project
+          </button>
         </div>
-        <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-          No graph projects yet
-        </h3>
-        <p
-          style={{
-            color: 'var(--text-muted)',
-            fontSize: '0.9rem',
-            maxWidth: '400px',
-            margin: '0 auto 1.5rem',
-          }}
-        >
-          Create an isolated graph project backed by an embedded Relate database and AI services to
-          get started.
-        </p>
-        <button
-          onClick={onNewProject}
-          style={{
-            backgroundColor: 'var(--accent)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '0.6rem 1.25rem',
-            fontWeight: 600,
-            fontSize: '0.875rem',
-          }}
-        >
-          + Create First Project
-        </button>
       </div>
     );
   }
 
   return (
     <div style={{ maxWidth: '1200px', margin: '2rem auto', padding: '0 1.5rem' }}>
+      <ArchitectureHero />
       <div
         style={{
           display: 'flex',
@@ -155,7 +157,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                     fontSize: '0.75rem',
                     padding: '0.15rem 0.5rem',
                     borderRadius: '4px',
-                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    backgroundColor: neo4jTheme.accentSoft(0.15),
                     color: 'var(--accent-light)',
                     textTransform: 'uppercase',
                     fontWeight: 600,
