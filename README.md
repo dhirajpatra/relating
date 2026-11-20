@@ -238,7 +238,11 @@ For local development, support a guided prerequisite check:
 6. Create a project-scoped store only after the user creates a project.
 7. Preserve existing stores. Never overwrite, clear, or migrate a store without explicit confirmation.
 
-Relate supports in-memory, directory, and single-file `.rl` stores. Prefer a directory store for active development and offer a single-file export when the installed version supports it and the user requests portability. Respect Relate's durability and backup guidance.
+Relate supports in-memory, directory, and single-file `.rl` stores. Relating runs in single-file mode. Respect Relate's durability and backup guidance.
+
+### How it uses Relate
+
+Relating runs Relate in single-file mode, with one persistent `.rl` store per project at `data/projects/<project-id>/graph.rl` (data root overridable via `RELATING_DATA_DIR`). We chose single-file mode because each project gets an isolated, persistent local graph that survives restarts and can be backed up, copied, or migrated as one file, which fits Relating's local-first, project-scoped design.
 
 ### Relate features to integrate
 
