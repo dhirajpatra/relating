@@ -23,7 +23,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 authors = ["Relating Contributors"]
-license = "Apache-2.0"
+license = "MIT"
 
 [workspace.dependencies]
 tokio = { version = "1.41", features = ["full"] }

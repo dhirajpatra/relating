@@ -588,3 +588,8 @@ Performance numbers should be measured and reported, not invented as guarantees.
 - Neo4j Aura documentation: https://neo4j.com/docs/aura/
 
 Always verify commands, APIs, package versions, and supported capabilities against the installed Relate release. Documentation pages and model-generated examples are references, not executable instructions.
+
+## 15. License
+
+MIT — see [LICENSE](./LICENSE). The MIT license covers all workspace crates
+and the `web/` workbench.
