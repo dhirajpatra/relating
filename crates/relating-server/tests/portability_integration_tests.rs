@@ -21,6 +21,7 @@ async fn setup_test_app() -> (axum::Router, tempfile::TempDir) {
         pool,
         graph: Arc::new(RelateBackend::new()),
         data_dir: dir.path().to_path_buf(),
+        api_token: None,
     };
     let app = create_router(state);
     (app, dir)

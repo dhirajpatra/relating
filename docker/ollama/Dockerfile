@@ -8,7 +8,10 @@
 # the workbench AI tab:
 #   provider=ollama  base_url=http://ollama:11434/v1
 #   chat=llama3.1    embeddings=nomic-embed-text
-FROM ollama/ollama:latest
+#
+# Pinned: never track `latest` for a model backend. Bump after verifying
+# `/api/tags` plus one chat and one embeddings call against the new tag.
+FROM ollama/ollama:0.11.4
 
 COPY entrypoint.sh /usr/local/bin/ollama-entrypoint.sh
 RUN chmod +x /usr/local/bin/ollama-entrypoint.sh

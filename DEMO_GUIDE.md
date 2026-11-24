@@ -169,7 +169,8 @@ HTTP transport needs the `RELATING_MCP_TOKEN` from step 2.
 3. **Plan Migration** → **Dry-run** (always `0` remote writes) → **Approve**
    → **Execute** → **Verify**. The plan banner states the write mode
    explicitly: MERGE upsert by stable keys — appends/updates only, the target
-   is never wiped.
+   is never wiped. Verification checks counts, content hashes, degrees, and
+   samples; rollback (API/CLI) removes exactly what the migration created.
 
 ### 5.9 Power tabs (1 minute each)
 
@@ -189,6 +190,9 @@ cargo run -q -p relating-cli -- demo seed --name cli-demo
 cargo run -q -p relating-cli -- validate --project $PID
 cargo run -q -p relating-cli -- schema export --project $PID --out /tmp/schema
 cargo run -q -p relating-cli -- advisor analyze --project $PID --queries queries.json
+cargo run -q -p relating-cli -- portability scan --dir . --emit text
+# full Aura migration against a running server (see docs/api/ci.md):
+cargo run -q -p relating-cli -- aura migrate --project $PID --connection $CID --yes --report out.json
 ```
 
 ## 7. Stop and reset
@@ -205,12 +209,16 @@ rm -rf ./data
 ```bash
 docker compose up --build
 # workbench at http://127.0.0.1:8080, data in the relating-data volume
-# team Postgres on 5432, Ollama AI on 11434 (see docs/docker.md)
+# add profiles as needed (see docs/docker.md):
+#   --profile postgres   team Postgres on 5432 (+ db-init provisioning job)
+#   --profile ollama     Ollama AI on 11434 (large model downloads)
+#   --profile neo4j      local Bolt target on 7687/7474 for migration testing
 ```
 
 The compose file reads `.env` for ports, passwords, and models (all have
 working defaults, so `.env` is optional). The server container itself
-always runs on SQLite; Postgres holds the provisioned team schema.
+always runs on SQLite; Postgres holds the provisioned team schema. All
+published ports bind to 127.0.0.1 only.
 
 ## 9. Troubleshooting
 

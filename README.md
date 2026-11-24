@@ -15,7 +15,7 @@ Relating is a local-first, AI-native graph development and GraphRAG workbench. I
 
 ## Quick start
 
-Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ with npm. Optional: Ollama (`ollama serve`) for local AI models.
+Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ with npm. Optional: Ollama (`ollama serve`) for local AI models, Docker with compose v2 for the container stack, and Python 3 for `migrate-aura.sh`.
 
 ```bash
 ./start.sh
@@ -23,7 +23,9 @@ Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ wit
 
 Then open http://127.0.0.1:8080 in your browser to use the workbench.
 
-The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `docker compose up --build` for the full stack (server + team Postgres + local Ollama AI, each with its own `Dockerfile` under `docker/` — see [docs/docker.md](docs/docker.md)).
+The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `docker compose up --build` for the server (SQLite — enough to run the app and migrate), plus opt-in `--profile postgres`, `--profile ollama`, and `--profile neo4j` services, each with its own `Dockerfile` under `docker/` (see [docs/docker.md](docs/docker.md)).
+
+> Windows: `start.sh` and `migrate-aura.sh` are bash-only. Run them from WSL2 or Git Bash with Rust, Node.js 20+, Docker Desktop (compose v2), and Python 3 on PATH. Native PowerShell is not supported.
 
 > The built-in mock AI provider is for **development and testing only** — it returns
 > deterministic canned responses and is never production AI functionality. Configure
@@ -35,11 +37,13 @@ see [docs/api/ci.md](docs/api/ci.md)).
 
 **Status: milestones A–E and releases R1–R6 are implemented** — projects, ingestion,
 ontology, graph explorer, Cypher, embeddings, retrieval, grounded Q&A, evaluation,
-MCP agent server, Aura migration over Bolt, schema-as-code, portability compiler,
-CI/CD gates, shadow testing, graph debugger, synthetic data, and the performance
-advisor. Also implemented: Relate↔Aura backend flip without query rewrites
-([backend_flip.md](docs/api/backend_flip.md)), Aura vector-index fit checks,
-PDF/DOCX ingestion, merge-upsert migration disclosure, and team secrets plus
+MCP agent server (read-only tools), Aura migration over Bolt, schema-as-code,
+portability compiler, CI/CD gates, shadow testing, graph debugger, synthetic
+data, and the performance advisor. Also implemented: Relate↔Aura backend flip
+without query rewrites ([backend_flip.md](docs/api/backend_flip.md)), Aura
+vector-index and tier-capacity fit checks, PDF/DOCX ingestion, merge-upsert
+migration disclosure, migration rollback, count/hash/degree verification,
+SARIF portability output, an API bearer-token gate, and team secrets plus
 PostgreSQL provisioning ([postgres.md](docs/postgres.md), [secrets.md](docs/secrets.md)).
 See [Visual overview](#visual-overview) and the [API docs](docs/api/) for
 details.
@@ -132,7 +136,8 @@ It is not a banking application and must not bake any single industry ontology i
    - Analyse Cypher and feature compatibility.
    - Generate a migration plan and dry-run report.
    - Transfer approved data in resumable batches.
-   - Verify counts, properties, relationships, constraints, and indexes.
+   - Verify counts, content hashes, relationship degrees, properties, constraints, and indexes.
+   - Roll back a migration by removing exactly the records it created.
    - Produce a migration manifest and audit report.
 
 Relating must remain useful when a user never migrates to Aura.
@@ -184,7 +189,7 @@ see [docs/postgres.md](docs/postgres.md); Vault secret backends remain roadmap.)
 | API/control plane | Rust + Axum + Tokio | Projects, jobs, policy, graph adapters, MCP orchestration |
 | Graph engine | Relate Rust crate / supported Relate interfaces | Local graph storage and Cypher execution |
 | AI service | Required provider abstraction | LLM, embeddings, extraction, reranking, evaluation |
-| Document workers | Python initially, isolated behind job interface | PDF/DOCX/HTML parsing and AI-heavy processing |
+| Document workers | Rust-native parsing (`relating-ingest`) | PDF/DOCX/CSV/JSON/text parsing and chunking; an isolated Python worker interface stays reserved for future AI/data-library needs |
 | Metadata | SQLite local; PostgreSQL server | Users, projects, sources, jobs, configs, audit |
 | Visualization | Cytoscape.js | Graph rendering and interaction |
 | MCP | Official MCP SDK / protocol-compatible transport | Tools and resources for external agents |
@@ -286,11 +291,10 @@ Initial MCP tools:
 - `analyze_aura_compatibility`
 - `preview_migration`
 
-Write tools, disabled unless explicitly enabled:
-- `ingest_source`
-- `write_cypher`
-- `create_ontology_revision`
-- `execute_approved_migration`
+Write tools (`ingest_source`, `write_cypher`, `create_ontology_revision`,
+`execute_approved_migration`) are **not implemented yet** — the server is
+read-only over MCP today. When they land they will be separate, disabled
+unless explicitly enabled, and approval-gated per the security rules below.
 
 Security rules:
 - Do not expose database credentials or provider API keys to the agent.
@@ -348,8 +352,7 @@ A user must be able to:
 - Docker Compose and documented local setup.
 
 **P1 — next**
-- CLI.
-- MCP write tools with policy approvals.
+- MCP write tools with policy approvals (read-only tools are done; see above).
 - SQL and REST connectors.
 - Incremental ingestion and change detection.
 - Team workspaces, OIDC, RBAC, audit exports.
@@ -407,8 +410,9 @@ flowchart TB
     DRY --> GATE{"8. Blockers?"}
     GATE -- "yes: fix + re-run" --> DRY
     GATE -- "none: approve" --> EXEC["9. Execute<br/>idempotent batches"]
-    EXEC --> VERIFY["10. Verify<br/>counts + samples"]
-    VERIFY --> REPORT["11. Manifest<br/>+ audit report"]
+    EXEC --> VERIFY["10. Verify<br/>counts + hashes + degrees + samples"]
+    VERIFY --> REPORT["12. Manifest<br/>+ audit report"]
+    VERIFY -. "optional" .-> ROLLBACK["11. Rollback<br/>remove tagged records"]
 ```
 
 1. Create and validate a destination connection.
@@ -420,8 +424,20 @@ flowchart TB
 7. Execute a dry run with no remote mutation.
 8. Require explicit approval.
 9. Transfer in idempotent, resumable batches using stable business keys where possible.
-10. Verify nodes, relationships, properties, constraints, and indexes.
-11. Produce a signed or integrity-checked migration manifest and audit report.
+10. Verify nodes, relationships (counts, content hashes, degrees), properties, constraints, and indexes.
+11. Optionally roll back by deleting exactly the records the migration created (migration-id tag; updates on pre-existing records are not reverted).
+12. Produce a signed or integrity-checked migration manifest and audit report.
+
+### Golden path (hardened) vs experimental
+
+The hardened golden path is: seed → analyze → dry-run → approve → execute → verify → report, driven by `./migrate-aura.sh --yes` or `relating aura migrate --project ID --connection CID --yes --report out.json`. It is covered by unit tests, fake-Bolt integration tests (resume-after-failure, parallel edges, rollback), and a CI job running the full flow against real Neo4j. Everything outside it — shadow replay, the graph debugger, synthetic fixtures, the sizing advisor, continuous sync — is functional but experimental: use it, but verify results before trusting them in production.
+
+### No query rewrites: what actually flips
+
+Two integration styles, two flip mechanisms — neither rewrites queries:
+
+- **Apps on Relating's API/MCP:** keep one statement and inject the target from configuration. Before migration the statement runs on `relate://local`; after migration the identical statement and bound parameters run on `aura://<connection-id>` via proxy mode (`connection_id` on the Cypher endpoints, `RELATING_TARGET` in client code). See [backend_flip.md](docs/api/backend_flip.md).
+- **Apps on a standard Neo4j driver directly:** the flip is a Bolt URI change in the app's own configuration. Relating's value there is everything around the flip: the compatibility analysis, the dry-run plan with MERGE disclosure, the idempotent transfer, the count/hash/degree verification, and the Portability Compiler scan of the app's embedded Cypher.
 
 Relate's existing Neo4j/Aura pull/push capabilities can be used where appropriate. Validate their exact semantics against the installed Relate version. In particular, do not assume that indexes, constraints, vector metadata, or all Neo4j features are transferred automatically. Never claim that a push is a destructive mirror unless the upstream implementation explicitly guarantees that behavior.
 
@@ -431,6 +447,8 @@ Incremental synchronization is not automatically real-time replication. It requi
 
 - Local secrets in OS keychain where available.
 - Server secrets through Vault/KMS or encrypted secret storage.
+- `RELATING_API_TOKEN` bearer gate for `/api/v1` on shared hosts (see [secrets.md](docs/secrets.md)); compose binds every port to 127.0.0.1.
+- Containers run as non-root; base images are minor-pinned.
 - TLS for remote interfaces.
 - OIDC and RBAC for team deployments.
 - Project-level data isolation.
@@ -450,32 +468,36 @@ Start with a small number of crates and modules. Expand only when boundaries are
 ```text
 relating/
 ├── web/                     # React + TypeScript workbench (12 tabs)
-├── crates/
-│   ├── relating-core/       # domain types and orchestration
+├── crates/                  # 16 workspace crates
+│   ├── relating-core/       # domain types, secrets, env config
+│   ├── relating-metadata/   # SQLite runtime store + Postgres provisioning
 │   ├── relating-server/     # Axum REST API + binaries
 │   ├── relating-graph/      # GraphBackend + Relate adapter
-│   ├── relating-ai/         # provider abstraction (mock/openai/ollama)
-│   ├── relating-ingest/     # source pipeline (CSV/JSON/text)
+│   ├── relating-ai/         # provider abstraction (mock/openai/ollama/meta)
+│   ├── relating-ingest/     # source pipeline (CSV/JSON/text/PDF/DOCX)
 │   ├── relating-retrieval/  # chunking, hybrid retrieval, Q&A, eval
 │   ├── relating-mcp/        # MCP tools + stdio/HTTP transports
 │   ├── relating-migrate/    # Bolt client, Aura analysis/plan/execute/verify
 │   ├── relating-schema/     # schema-as-code docs, diff, conformance
-│   ├── relating-portability/# repo scanner, rules, remediation, tests
-│   ├── relating-cli/        # relating CLI (validate, gates, schema, eval)
+│   ├── relating-portability/# repo scanner, rules, remediation, tests, SARIF
+│   ├── relating-cli/        # relating CLI (validate, migrate, gates, eval)
 │   ├── relating-shadow/     # dual-backend replay + comparison
 │   ├── relating-debug/      # GraphRAG traces + diagnosis
 │   ├── relating-synth/      # synthetic fixture generation
 │   └── relating-advisor/    # perf/cost rules, sizing, measurements
+├── tests/fixtures/          # deterministic seed fixtures (aura-fill ontology)
 ├── docs/api/                # per-area API contracts
-├── .github/workflows/       # relating.yml CI gates
+├── .github/workflows/       # CI gates, Aura nightly, releases
 ├── start.sh                 # one-command local start
+├── migrate-aura.sh          # Docker + approval-gated Aura migration script
 ├── docker/                  # one folder + Dockerfile per compose service
 │   ├── server/              # API + workbench UI + MCP (also used by db-init)
-│   ├── postgres/            # team Postgres 17
-│   ├── ollama/              # local AI backend with model preload
+│   ├── postgres/            # team Postgres 17 (--profile postgres)
+│   ├── ollama/              # local AI backend with model preload (--profile ollama)
 │   └── neo4j/               # opt-in local Bolt target (--profile neo4j)
 ├── Cargo.toml
 ├── README.md
+├── AGENTS.md                # contributor + coding-agent conventions
 ├── SKILL.md
 ├── .env.example
 └── docker-compose.yml
@@ -547,6 +569,7 @@ A milestone is complete only when its acceptance tests pass.
 12. Keep secrets out of browser storage, logs, and MCP payloads.
 13. Do not fork Relate for convenience; isolate upstream-specific behavior in its adapter.
 14. Keep the simplest implementation that passes the acceptance criteria.
+15. Keep the golden path (seed → analyze → dry-run → approve → execute → verify → report) covered by automated tests; label everything outside it experimental until it earns the same coverage.
 
 ## 13. Definition of done
 

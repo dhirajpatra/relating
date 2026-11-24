@@ -46,7 +46,11 @@ pub fn parse_text_content(
 
     let profile = SourceProfile {
         total_records: records.len(),
-        field_names: vec!["text".to_string(), "length".to_string(), "block_index".to_string()],
+        field_names: vec![
+            "text".to_string(),
+            "length".to_string(),
+            "block_index".to_string(),
+        ],
         sample_records,
     };
 

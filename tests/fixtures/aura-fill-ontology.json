@@ -1,0 +1,48 @@
+{
+  "_comment": "Fixed ontology for the deterministic aura-fill demo seed (migrate-aura.sh). Matches the bundled CSVs: employees.csv (24 rows, fictional people), company.csv (4), city.csv (8), roles.csv (6) -> 42 nodes, 72 relationships. Import via POST /projects/{id}/ontology/import, then approve. No LLM call involved.",
+  "entities": [
+    {
+      "label": "Employee",
+      "display_name": "Employee",
+      "description": "Company employee with a role in a city",
+      "properties": [
+        {"name": "name", "data_type": "string", "is_primary_key": true},
+        {"name": "role", "data_type": "string"},
+        {"name": "company", "data_type": "string"},
+        {"name": "city", "data_type": "string"},
+        {"name": "company_id", "data_type": "string"},
+        {"name": "role_id", "data_type": "string"},
+        {"name": "city_id", "data_type": "string"}
+      ]
+    },
+    {
+      "label": "Company",
+      "display_name": "Company",
+      "description": "Employer company",
+      "properties": [
+        {"name": "name", "data_type": "string", "is_primary_key": true}
+      ]
+    },
+    {
+      "label": "City",
+      "display_name": "City",
+      "description": "Work city",
+      "properties": [
+        {"name": "name", "data_type": "string", "is_primary_key": true}
+      ]
+    },
+    {
+      "label": "Role",
+      "display_name": "Role",
+      "description": "Job role",
+      "properties": [
+        {"name": "title", "data_type": "string", "is_primary_key": true}
+      ]
+    }
+  ],
+  "relationships": [
+    {"rel_type": "WORKS_AT", "source_label": "Employee", "target_label": "Company", "description": "Employee works at company (via company_id)"},
+    {"rel_type": "HAS_ROLE", "source_label": "Employee", "target_label": "Role", "description": "Employee has role (via role_id)"},
+    {"rel_type": "LOCATED_IN", "source_label": "Employee", "target_label": "City", "description": "Employee located in city (via city_id)"}
+  ]
+}

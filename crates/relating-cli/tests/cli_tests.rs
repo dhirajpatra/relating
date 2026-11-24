@@ -54,7 +54,16 @@ async fn setup_clean_project() -> Fixture {
 }
 
 fn run_cli(fixture: &Fixture, args: &[&str]) -> (i32, String) {
+    // Hermetic child: run from the fixture dir so dotenv's upward search
+    // cannot find the developer's real workspace .env (whose LLM_BACKEND /
+    // keys would reroute the mock provider to the network), and strip the
+    // Meta routing vars outright. Auth-style fixtures set their own
+    // RELATING_TEST_* vars in-process, which still inherit.
     let output = Command::new(relating_bin())
+        .current_dir(&fixture.data_dir)
+        .env_remove("LLM_BACKEND")
+        .env_remove("META_API_KEY")
+        .env_remove("MODEL_API_KEY")
         .args([
             "--data-dir",
             &fixture.data_dir,
@@ -434,7 +443,12 @@ async fn test_demo_seed_then_validate() {
     let fixture = setup_clean_project().await;
     // Seed a second project via the binary, then validate it by parsed ID.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_relating"))
-        .args(["--data-dir", &fixture.data_dir, "--database-url", &fixture.db_url])
+        .args([
+            "--data-dir",
+            &fixture.data_dir,
+            "--database-url",
+            &fixture.db_url,
+        ])
         .args(["demo", "seed", "--format", "json"])
         .output()
         .expect("failed to run relating binary");
@@ -450,7 +464,12 @@ async fn test_demo_seed_then_validate() {
 
     // Text mode also prints a parseable project_id line.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_relating"))
-        .args(["--data-dir", &fixture.data_dir, "--database-url", &fixture.db_url])
+        .args([
+            "--data-dir",
+            &fixture.data_dir,
+            "--database-url",
+            &fixture.db_url,
+        ])
         .args(["demo", "seed", "--name", "second"])
         .output()
         .expect("failed to run relating binary");

@@ -6,9 +6,9 @@ pub mod value_converter;
 
 pub use backend::{GraphBackend, RelateBackend};
 pub use error::GraphError;
-pub use target::QueryTarget;
 pub use schema::{
     CytoscapeEdge, CytoscapeEdgeData, CytoscapeElements, CytoscapeGraph, CytoscapeNode,
     CytoscapeNodeData, GraphQueryResult, GraphSchemaInfo, GraphWriteResult,
 };
+pub use target::QueryTarget;
 pub use value_converter::{json_to_relate, relate_to_json};

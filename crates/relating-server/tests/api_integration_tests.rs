@@ -16,6 +16,7 @@ async fn setup_test_app() -> (axum::Router, tempfile::TempDir) {
         pool,
         graph: Arc::new(RelateBackend::new()),
         data_dir: dir.path().to_path_buf(),
+        api_token: None,
     };
     let app = create_router(state);
     (app, dir)
@@ -190,4 +191,70 @@ async fn test_full_project_and_cypher_lifecycle() {
         .unwrap();
 
     assert_eq!(after_delete_res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_api_token_gates_v1_routes_but_not_health() {
+    let dir = tempdir().unwrap();
+    let pool = init_in_memory_db().await.unwrap();
+    let state = AppState {
+        pool,
+        graph: Arc::new(RelateBackend::new()),
+        data_dir: dir.path().to_path_buf(),
+        api_token: Some("test-token-123".to_string()),
+    };
+    let app = create_router(state);
+
+    // Health stays open with no credentials.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // API routes without a token are refused.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/projects")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // A wrong token is refused too.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/projects")
+                .header("Authorization", "Bearer wrong-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // The right token passes through to the handler.
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/projects")
+                .header("Authorization", "Bearer test-token-123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }

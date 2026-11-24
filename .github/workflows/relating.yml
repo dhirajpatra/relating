@@ -8,8 +8,11 @@
 # Optional setup:
 #   - Commit exported schema-as-code (relating schema export) under relating/
 #     to enable the schema-diff gate.
-#   - Set the AURA_PASSWORD secret plus the AURA_CONNECTION_ID variable to
-#     enable Aura analysis and shadow comparison.
+#   - Set the AURA_ENABLED variable to 'true', plus the AURA_PASSWORD secret
+#     and the AURA_CONNECTION_ID variable, to enable Aura analysis and shadow
+#     comparison. (The gate reads vars, never secrets: secrets are not usable
+#     in `if` expressions, and a step-level `env:` is invisible to its own
+#     `if`, so the secret is exposed at job level instead.)
 #   - Commit eval/questions.txt to enable the retrieval evaluation gate.
 name: Relating Graph Validation
 
@@ -19,9 +22,171 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
+  lint-test:
+    name: fmt / clippy / test / web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint with clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build workbench UI
+        run: |
+          cd web
+          npm ci --no-audit --no-fund
+          npm run build
+
+  docker-build:
+    name: Build server image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/server/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/${{ github.repository }}-server:latest
+            ghcr.io/${{ github.repository }}-server:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  neo4j-migration-flow:
+    name: Migration flow vs Neo4j
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/relating-neo4j
+        ports:
+          - 7687:7687
+          - 7474:7474
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p relating-neo4j 'RETURN 1 AS ok'"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 10
+          --health-start-period 60s
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build server and CLI
+        run: cargo build --locked --release -p relating-server -p relating-cli
+
+      - name: Start the API
+        env:
+          AURA_PASSWORD: relating-neo4j
+        run: |
+          export RELATING_DATA_DIR=/tmp/relating-ci-data
+          export RELATING_DATABASE_URL=sqlite:///tmp/relating-ci-data/relating_metadata.db
+          mkdir -p "$RELATING_DATA_DIR"
+          ./target/release/relating-server > /tmp/relating-server.log 2>&1 &
+          echo $! > /tmp/relating-server.pid
+          for attempt in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/api/v1/health > /dev/null; then
+              echo "API is up."
+              break
+            fi
+            if [ "$attempt" = "30" ]; then
+              echo "API never came up:" >&2
+              tail -n 50 /tmp/relating-server.log >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Run analyze, plan, dry-run, approve, execute, verify
+        env:
+          AURA_PASSWORD: relating-neo4j
+        run: |
+          export RELATING_DATA_DIR=/tmp/relating-ci-data
+          export RELATING_DATABASE_URL=sqlite:///tmp/relating-ci-data/relating_metadata.db
+          API=http://127.0.0.1:8080/api/v1
+          PID=$(./target/release/relating demo seed --format json | jq -r .project_id)
+          if [ -z "$PID" ] || [ "$PID" = "null" ]; then
+            echo "Failed to seed a demo project." >&2
+            exit 1
+          fi
+          echo "Project: $PID"
+          CID=$(curl -sf -X POST "$API/projects/$PID/connections/aura" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"ci-neo4j","uri":"bolt://127.0.0.1:7687","username":"neo4j"}' | jq -r .id)
+          echo "Connection: $CID"
+          curl -sf -X POST "$API/projects/$PID/connections/aura/$CID/test" | jq -e .reachable > /dev/null
+          curl -sf -X POST "$API/projects/$PID/migrations/analyze" \
+            -H 'Content-Type: application/json' \
+            -d "{\"connection_id\":\"$CID\"}" | jq -e .target_reachable > /dev/null
+          MID=$(curl -sf -X POST "$API/projects/$PID/migrations/plan" \
+            -H 'Content-Type: application/json' \
+            -d "{\"connection_id\":\"$CID\"}" | jq -r .migration.id)
+          echo "Migration: $MID"
+          DRY=$(curl -sf -X POST "$API/projects/$PID/migrations/$MID/dry-run")
+          echo "$DRY" | jq -e '.remote_writes == 0 and (.blockers | length == 0)' > /dev/null
+          curl -sf -X POST "$API/projects/$PID/migrations/$MID/approve" \
+            -H 'Content-Type: application/json' -d '{"approved":true}' > /dev/null
+          curl -sf -X POST "$API/projects/$PID/migrations/$MID/execute" > /dev/null
+          VER=$(curl -sf -X POST "$API/projects/$PID/migrations/$MID/verify")
+          echo "$VER" | jq -e '.passed == true' > /dev/null
+          curl -sf "$API/projects/$PID/migrations/$MID/report" | jq -e '.migration_id == "'"$MID"'"' > /dev/null
+          echo "Migration flow verified end to end."
+
+      - name: Show server log on failure
+        if: failure()
+        run: tail -n 100 /tmp/relating-server.log || true
+
+      - name: Stop the API
+        if: always()
+        run: kill "$(cat /tmp/relating-server.pid)" || true
+
   graph-validation:
     runs-on: ubuntu-latest
+    env:
+      # Job level on purpose: step-level `env:` is invisible to that same
+      # step's `if:`, and secrets cannot appear in `if:` at all. Steps gate
+      # on vars.AURA_ENABLED plus vars.AURA_CONNECTION_ID instead.
+      AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +194,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build relating CLI
-        run: cargo build --release -p relating-cli
+        run: cargo build --locked --release -p relating-cli
 
       - name: Resolve project under validation
         id: project
@@ -57,9 +222,7 @@ jobs:
         run: ./target/release/relating test graph --project "${{ steps.project.outputs.pid }}"
 
       - name: Check Aura compatibility
-        if: ${{ env.AURA_PASSWORD != '' && vars.AURA_CONNECTION_ID != '' }}
-        env:
-          AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
+        if: ${{ vars.AURA_ENABLED == 'true' && vars.AURA_CONNECTION_ID != '' }}
         run: ./target/release/relating aura analyze --project "${{ steps.project.outputs.pid }}" --connection "${{ vars.AURA_CONNECTION_ID }}"
 
       - name: Run retrieval evaluation gate
@@ -67,7 +230,20 @@ jobs:
         run: ./target/release/relating eval run --project "${{ steps.project.outputs.pid }}" --questions eval/questions.txt --min-grounded 0.5
 
       - name: Run shadow comparison gate
-        if: ${{ hashFiles('shadow/queries.json') != '' && env.AURA_PASSWORD != '' && vars.AURA_CONNECTION_ID != '' }}
-        env:
-          AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
+        if: ${{ hashFiles('shadow/queries.json') != '' && vars.AURA_ENABLED == 'true' && vars.AURA_CONNECTION_ID != '' }}
         run: ./target/release/relating shadow run --project "${{ steps.project.outputs.pid }}" --connection "${{ vars.AURA_CONNECTION_ID }}" --queries shadow/queries.json
+
+      - name: Scan portability and upload SARIF
+        run: |
+          ./target/release/relating portability scan --dir . --emit sarif --out portability.sarif || echo "scan-exit=$? (breaking findings are advisory on this repo's own fixtures)"
+          if [ -f portability.sarif ]; then
+            echo "sarif-present=true" >> "$GITHUB_OUTPUT"
+          fi
+        id: portability
+
+      - name: Upload portability findings
+        if: steps.portability.outputs.sarif-present == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: portability.sarif
+          category: portability

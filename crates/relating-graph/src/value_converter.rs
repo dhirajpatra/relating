@@ -11,9 +11,7 @@ pub fn relate_to_json(val: &Value) -> serde_json::Value {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Value::String(s) => serde_json::Value::String(s.to_string()),
-        Value::List(list) => {
-            serde_json::Value::Array(list.iter().map(relate_to_json).collect())
-        }
+        Value::List(list) => serde_json::Value::Array(list.iter().map(relate_to_json).collect()),
         Value::Map(map) => {
             let mut obj = serde_json::Map::new();
             for (k, v) in map.iter() {
@@ -27,10 +25,7 @@ pub fn relate_to_json(val: &Value) -> serde_json::Value {
                 "_type".to_string(),
                 serde_json::Value::String("node".to_string()),
             );
-            obj.insert(
-                "id".to_string(),
-                serde_json::Value::Number((node.id as i64).into()),
-            );
+            obj.insert("id".to_string(), serde_json::Value::Number(node.id.into()));
             obj.insert(
                 "labels".to_string(),
                 serde_json::Value::Array(
@@ -53,22 +48,16 @@ pub fn relate_to_json(val: &Value) -> serde_json::Value {
                 "_type".to_string(),
                 serde_json::Value::String("relationship".to_string()),
             );
-            obj.insert(
-                "id".to_string(),
-                serde_json::Value::Number((rel.id as i64).into()),
-            );
+            obj.insert("id".to_string(), serde_json::Value::Number(rel.id.into()));
             obj.insert(
                 "rel_type".to_string(),
                 serde_json::Value::String(rel.rel_type.to_string()),
             );
             obj.insert(
                 "start".to_string(),
-                serde_json::Value::Number((rel.start as i64).into()),
+                serde_json::Value::Number(rel.start.into()),
             );
-            obj.insert(
-                "end".to_string(),
-                serde_json::Value::Number((rel.end as i64).into()),
-            );
+            obj.insert("end".to_string(), serde_json::Value::Number(rel.end.into()));
             let mut props = serde_json::Map::new();
             for (k, v) in rel.properties.iter() {
                 props.insert(k.clone(), relate_to_json(v));

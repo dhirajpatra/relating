@@ -21,6 +21,7 @@ async fn setup_test_app() -> (axum::Router, tempfile::TempDir) {
         pool,
         graph: Arc::new(RelateBackend::new()),
         data_dir: dir.path().to_path_buf(),
+        api_token: None,
     };
     let app = create_router(state);
     (app, dir)
@@ -376,5 +377,270 @@ async fn test_analyze_accepts_and_validates_aura_tier() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(err["error"]["message"].as_str().unwrap().contains("mystery-tier"));
+    assert!(err["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("mystery-tier"));
+}
+
+async fn seed_project_with_cypher(app: &axum::Router, name: &str, statements: &[&str]) -> String {
+    let (status, proj) =
+        post_json(app, "/api/v1/projects".to_string(), json!({"name": name})).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proj["id"].as_str().unwrap().to_string();
+    for stmt in statements {
+        let (status, _) = post_json(
+            app,
+            format!("/api/v1/projects/{}/cypher/write", pid),
+            json!({"query": stmt}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "statement: {}", stmt);
+    }
+    pid
+}
+
+async fn connect_fake_bolt(app: &axum::Router, pid: &str, uri: &str) -> String {
+    let (status, conn) = post_json(
+        app,
+        format!("/api/v1/projects/{}/connections/aura", pid),
+        json!({
+            "name": "fake",
+            "uri": uri,
+            "username": "neo4j",
+            "auth_env_var": TEST_PASSWORD_ENV
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    conn["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn test_execute_resumes_after_mid_batch_failure() {
+    std::env::set_var(TEST_PASSWORD_ENV, "test-password");
+    let (uri, server, fake_state) = start_fake_bolt().await;
+    let (app, _dir) = setup_test_app().await;
+
+    // Three nodes, batch size 1: three node batches, no relationships.
+    let pid = seed_project_with_cypher(
+        &app,
+        "Resume E2E",
+        &[
+            "CREATE (:Person {uid: 'Person:1', name: 'Ada'})",
+            "CREATE (:Person {uid: 'Person:2', name: 'Bob'})",
+            "CREATE (:Person {uid: 'Person:3', name: 'Cyd'})",
+        ],
+    )
+    .await;
+    let cid = connect_fake_bolt(&app, &pid, &uri).await;
+
+    let (status, plan) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/plan", pid),
+        json!({"connection_id": cid, "batch_size": 1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(plan["dry_run"]["blockers"].as_array().unwrap().is_empty());
+    let mid = plan["migration"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/approve", pid, mid),
+        json!({"approved": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Kill the second write: batch 0 lands, batch 1 fails, batch 2 never runs.
+    fake_state.lock().await.fail_write_at = Some(1);
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "execute must fail, got {}",
+        status
+    );
+    let (status, failed) =
+        get_json(&app, format!("/api/v1/projects/{}/migrations/{}", pid, mid)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(
+        failed["progress"]["completed_batches"],
+        json!(["nodes:Person:0"])
+    );
+
+    // Resume: the completed batch is skipped, the rest land exactly once.
+    fake_state.lock().await.fail_write_at = None;
+    let (status, executed) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(executed["status"], "completed");
+    assert_eq!(executed["progress"]["nodes_migrated"], 3);
+    assert_eq!(
+        executed["progress"]["completed_batches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let guard = fake_state.lock().await;
+    assert_eq!(guard.nodes.get("Person").map(|t| t.len()), Some(3));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn test_parallel_edges_between_same_nodes_stay_distinct() {
+    std::env::set_var(TEST_PASSWORD_ENV, "test-password");
+    let (uri, server, fake_state) = start_fake_bolt().await;
+    let (app, _dir) = setup_test_app().await;
+
+    let pid = seed_project_with_cypher(
+        &app,
+        "Parallel edges",
+        &[
+            "CREATE (:Person {uid: 'Person:1', name: 'Ada'})",
+            "CREATE (:Person {uid: 'Person:2', name: 'Bob'})",
+            "MATCH (a:Person {uid: 'Person:1'}), (b:Person {uid: 'Person:2'}) CREATE (a)-[:KNOWS {since: 2020}]->(b)",
+            "MATCH (a:Person {uid: 'Person:1'}), (b:Person {uid: 'Person:2'}) CREATE (a)-[:KNOWS {since: 2021}]->(b)",
+        ],
+    )
+    .await;
+    let cid = connect_fake_bolt(&app, &pid, &uri).await;
+
+    let (status, plan) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/plan", pid),
+        json!({"connection_id": cid}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(plan["migration"]["plan"]["total_relationships"], 2);
+    let mid = plan["migration"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/approve", pid, mid),
+        json!({"approved": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, executed) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(executed["progress"]["relationships_migrated"], 2);
+
+    // Two distinct target edges, and verification (counts + hashes + degrees)
+    // agrees with the source.
+    assert_eq!(
+        fake_state
+            .lock()
+            .await
+            .rel_uids
+            .get("KNOWS")
+            .map(|s| s.len()),
+        Some(2)
+    );
+    let (status, verification) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/verify", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(verification["passed"], true);
+    assert_eq!(verification["hash_checks"].as_array().unwrap().len(), 1);
+    assert_eq!(verification["degree_checks"].as_array().unwrap().len(), 1);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn test_rollback_removes_only_what_the_migration_created() {
+    std::env::set_var(TEST_PASSWORD_ENV, "test-password");
+    let (uri, server, fake_state) = start_fake_bolt().await;
+    let (app, _dir) = setup_test_app().await;
+
+    let pid = seed_project_with_cypher(
+        &app,
+        "Rollback E2E",
+        &[
+            "CREATE (a:Person {uid: 'Person:1', name: 'Ada'})-[:KNOWS]->(b:Person {uid: 'Person:2', name: 'Bob'})",
+        ],
+    )
+    .await;
+    let cid = connect_fake_bolt(&app, &pid, &uri).await;
+
+    let (status, plan) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/plan", pid),
+        json!({"connection_id": cid}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mid = plan["migration"]["id"].as_str().unwrap().to_string();
+
+    // A migration that never executed has nothing to roll back.
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/rollback", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/approve", pid, mid),
+        json!({"approved": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        fake_state.lock().await.nodes.get("Person").map(|t| t.len()),
+        Some(2)
+    );
+
+    let (status, outcome) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/rollback", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(outcome["nodes_deleted"], 2);
+    assert_eq!(outcome["relationships_deleted"], 1);
+
+    let (status, rolled_back) =
+        get_json(&app, format!("/api/v1/projects/{}/migrations/{}", pid, mid)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rolled_back["status"], "rolled_back");
+
+    let guard = fake_state.lock().await;
+    assert_eq!(guard.nodes.get("Person").map(|t| t.len()), Some(0));
+    assert_eq!(guard.rel_uids.get("KNOWS").map(|s| s.len()), Some(0));
+
+    server.abort();
 }

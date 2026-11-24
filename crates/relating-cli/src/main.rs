@@ -20,6 +20,8 @@ fn usage() -> ! {
     eprintln!("Commands:");
     eprintln!("  validate --project ID [--all] [--connection CID] [--eval-questions FILE]");
     eprintln!("  aura analyze --project ID [--connection CID]");
+    eprintln!("  aura migrate --project ID --connection CID [--yes] [--report FILE] [--aura-tier T] [--api-url URL]");
+    eprintln!("  portability scan --dir DIR [--emit text|json|sarif] [--out FILE]");
     eprintln!("  test graph --project ID [--revision N]");
     eprintln!("  schema export --project ID --out DIR");
     eprintln!("  schema diff --project ID --file schema.json");
@@ -109,6 +111,7 @@ fn parse_flags(rest: &[String]) -> Result<(Vec<String>, HashMap<String, String>)
                 || name == "materialize"
                 || name == "measure"
                 || name == "fail-on-warning"
+                || name == "yes"
             {
                 flags.insert(name.to_string(), "true".to_string());
                 continue;
@@ -305,6 +308,383 @@ async fn cmd_aura_analyze(
     };
     println!("{}", render_validate(&report, opts.format));
     Ok(if report.passed { 0 } else { 1 })
+}
+
+/// Thin HTTP client for commands that drive the running server API.
+/// Sends `Authorization: Bearer $RELATING_API_TOKEN` when the token is set.
+struct ApiClient {
+    base: String,
+    client: reqwest::Client,
+    token: Option<String>,
+}
+
+impl ApiClient {
+    fn from_flags(flags: &HashMap<String, String>) -> Result<Self, CliError> {
+        let base = match flags.get("api-url") {
+            Some(url) => url.trim_end_matches('/').to_string(),
+            None => {
+                let port = std::env::var("RELATING_PORT").unwrap_or_else(|_| "8080".to_string());
+                format!("http://127.0.0.1:{}/api/v1", port)
+            }
+        };
+        let token = std::env::var("RELATING_API_TOKEN")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .build()
+            .map_err(|e| CliError::Http(format!("Cannot build HTTP client: {}", e)))?;
+        Ok(Self {
+            base,
+            client,
+            token,
+        })
+    }
+
+    fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(token) => builder.bearer_auth(token),
+            None => builder,
+        }
+    }
+
+    async fn post(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, CliError> {
+        let url = format!("{}{}", self.base, path);
+        let res = self
+            .authed(self.client.post(&url).json(body))
+            .send()
+            .await
+            .map_err(|e| CliError::Http(format!("POST {} failed: {}", url, e)))?;
+        let status = res.status();
+        let value: serde_json::Value = res
+            .json()
+            .await
+            .map_err(|e| CliError::Http(format!("POST {} returned unreadable JSON: {}", url, e)))?;
+        if !status.is_success() {
+            let detail = value
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error");
+            return Err(CliError::Http(format!(
+                "POST {} failed ({}): {}",
+                path, status, detail
+            )));
+        }
+        Ok(value)
+    }
+
+    async fn get(&self, path: &str) -> Result<serde_json::Value, CliError> {
+        let url = format!("{}{}", self.base, path);
+        let res = self
+            .authed(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| CliError::Http(format!("GET {} failed: {}", url, e)))?;
+        let status = res.status();
+        let value: serde_json::Value = res
+            .json()
+            .await
+            .map_err(|e| CliError::Http(format!("GET {} returned unreadable JSON: {}", url, e)))?;
+        if !status.is_success() {
+            let detail = value
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error");
+            return Err(CliError::Http(format!(
+                "GET {} failed ({}): {}",
+                path, status, detail
+            )));
+        }
+        Ok(value)
+    }
+}
+
+fn confirm_interactive(prompt: &str) -> bool {
+    use std::io::{self, IsTerminal, Write};
+    // Fail closed when stdin is not a terminal (piped CI input refuses).
+    if !io::stdin().is_terminal() {
+        return false;
+    }
+    eprint!("{} [y/N] ", prompt);
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    match io::stdin().read_line(&mut line) {
+        Ok(_) => matches!(line.trim().to_lowercase().as_str(), "y" | "yes"),
+        Err(_) => false,
+    }
+}
+
+/// Full approval-gated migration over the server API:
+/// test -> analyze -> plan -> dry-run -> approve -> execute -> verify ->
+/// report. Prints the plan summary and requires `--yes` or an interactive
+/// yes before anything writes to Aura. Exit 1 on blockers/verify failure.
+async fn cmd_aura_migrate(
+    _opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let project = require_flag(flags, "project")?;
+    parse_project_id(&project)?;
+    let connection = require_flag(flags, "connection")?;
+    let auto_yes = flags.contains_key("yes");
+    let api = ApiClient::from_flags(flags)?;
+
+    println!("--- testing connection");
+    let test = api
+        .post(
+            &format!("/projects/{}/connections/aura/{}/test", project, connection),
+            &serde_json::json!({}),
+        )
+        .await?;
+    if test.get("reachable").and_then(|v| v.as_bool()) != Some(true) {
+        return Err(CliError::Http(format!("Aura test failed: {}", test)));
+    }
+    println!(
+        "Reachable: {}",
+        test.get("message").and_then(|v| v.as_str()).unwrap_or("ok")
+    );
+
+    println!("--- analyzing migration");
+    let mut analyze_body = serde_json::json!({"connection_id": connection});
+    if let Some(tier) = flags.get("aura-tier") {
+        analyze_body["aura_tier"] = serde_json::Value::String(tier.clone());
+    }
+    let analysis = api
+        .post(
+            &format!("/projects/{}/migrations/analyze", project),
+            &analyze_body,
+        )
+        .await?;
+    println!(
+        "Target reachable: {} agent: {}",
+        analysis
+            .get("target_reachable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        analysis
+            .get("target_agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+    );
+
+    println!("--- planning migration");
+    let mut plan_body = serde_json::json!({"connection_id": connection});
+    if let Some(tier) = flags.get("aura-tier") {
+        plan_body["aura_tier"] = serde_json::Value::String(tier.clone());
+    }
+    let plan = api
+        .post(
+            &format!("/projects/{}/migrations/plan", project),
+            &plan_body,
+        )
+        .await?;
+    let mid = plan
+        .get("migration")
+        .and_then(|m| m.get("id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CliError::Http("Plan response has no migration id".to_string()))?
+        .to_string();
+    println!("Migration: {}", mid);
+
+    println!("--- dry-run (must report zero remote writes)");
+    let dry = api
+        .post(
+            &format!("/projects/{}/migrations/{}/dry-run", project, mid),
+            &serde_json::json!({}),
+        )
+        .await?;
+    let blockers = dry
+        .get("blockers")
+        .and_then(|b| b.as_array())
+        .cloned()
+        .unwrap_or_default();
+    println!(
+        "remote_writes={} blockers={}",
+        dry.get("remote_writes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(u64::MAX),
+        blockers.len()
+    );
+    if !blockers.is_empty() {
+        eprintln!("Dry-run blockers must be resolved before approve:");
+        for blocker in &blockers {
+            eprintln!("  - {}", blocker.as_str().unwrap_or("?"));
+        }
+        return Ok(1);
+    }
+
+    let dry_plan = dry.get("plan").cloned().unwrap_or(serde_json::Value::Null);
+    println!(
+        "Plan summary: {} nodes, {} relationships in {} batches (mode: {}, destructive: {})",
+        dry_plan
+            .get("total_nodes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        dry_plan
+            .get("total_relationships")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        dry_plan
+            .get("total_batches")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        dry_plan
+            .get("write_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?"),
+        dry_plan
+            .get("destructive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+    );
+    if let Some(semantics) = dry_plan.get("write_semantics").and_then(|v| v.as_str()) {
+        println!("Semantics: {}", semantics);
+    }
+    for warning in dry_plan
+        .get("warnings")
+        .and_then(|w| w.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
+        println!("Plan warning: {}", warning.as_str().unwrap_or("?"));
+    }
+    if auto_yes {
+        println!("Approve this migration (writes to Aura)? [auto-yes]");
+    } else if !confirm_interactive("Approve this migration (writes to Aura)?") {
+        eprintln!("Not approved: re-run with --yes or answer 'yes' at the prompt.");
+        return Ok(1);
+    }
+
+    println!("--- approving");
+    api.post(
+        &format!("/projects/{}/migrations/{}/approve", project, mid),
+        &serde_json::json!({"approved": true}),
+    )
+    .await?;
+
+    println!("--- executing (writes to Aura)");
+    let exe = api
+        .post(
+            &format!("/projects/{}/migrations/{}/execute", project, mid),
+            &serde_json::json!({}),
+        )
+        .await?;
+    println!("Executed: {}", exe.get("progress").unwrap_or(&exe));
+
+    println!("--- verifying");
+    let ver = api
+        .post(
+            &format!("/projects/{}/migrations/{}/verify", project, mid),
+            &serde_json::json!({}),
+        )
+        .await?;
+    let passed = ver.get("passed").and_then(|v| v.as_bool()).unwrap_or(false);
+    println!("Verify passed: {}", passed);
+    if !passed {
+        for detail in ver
+            .get("details")
+            .and_then(|d| d.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            eprintln!("Verify detail: {}", detail.as_str().unwrap_or("?"));
+        }
+        eprintln!("Verification reported passed=false; migration NOT trusted.");
+        return Ok(1);
+    }
+
+    println!("--- fetching audit report");
+    let report = api
+        .get(&format!("/projects/{}/migrations/{}/report", project, mid))
+        .await?;
+    if let Some(path) = flags.get("report") {
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&report).unwrap_or_default(),
+        )
+        .map_err(|e| CliError::Check(format!("Cannot write '{}': {}", path, e)))?;
+        println!("Report written: {}", path);
+    }
+
+    println!(
+        "DONE: project {} migrated to Aura (migration {})",
+        project, mid
+    );
+    Ok(0)
+}
+
+/// Scan a repository for Cypher portability risks. Emits text (default),
+/// json, or sarif; with --out, writes the full document to a file.
+/// Exit 1 when breaking (needs-rewrite) findings exist.
+async fn cmd_portability_scan(
+    _opts: &GlobalOpts,
+    flags: &HashMap<String, String>,
+) -> Result<i32, CliError> {
+    let dir = flags.get("dir").cloned().unwrap_or_else(|| ".".to_string());
+    let emit = flags
+        .get("emit")
+        .cloned()
+        .unwrap_or_else(|| "text".to_string());
+    let emit = emit.to_ascii_lowercase();
+    if !["text", "json", "sarif"].contains(&emit.as_str()) {
+        return Err(CliError::Usage(
+            "Unknown --emit (expected text, json, or sarif)".to_string(),
+        ));
+    }
+
+    let scan = relating_portability::scan_repository(std::path::Path::new(&dir))?;
+    let report = relating_portability::build_report(&scan);
+
+    let document = match emit.as_str() {
+        "json" => serde_json::to_string_pretty(&report)
+            .map_err(|e| CliError::Check(format!("Cannot render report: {}", e)))?,
+        "sarif" => serde_json::to_string_pretty(&relating_portability::to_sarif(&report))
+            .map_err(|e| CliError::Check(format!("Cannot render SARIF: {}", e)))?,
+        _ => {
+            let mut out = format!(
+                "Portability: {} files, {} queries ({} portable, {} transform, {} rewrite, {} review)\n",
+                report.summary.files_scanned,
+                report.summary.queries_total,
+                report.summary.portable,
+                report.summary.transform,
+                report.summary.needs_rewrite,
+                report.summary.needs_review,
+            );
+            for finding in &report.findings {
+                if matches!(finding.verdict, relating_portability::PortVerdict::Portable) {
+                    continue;
+                }
+                out.push_str(&format!(
+                    "[{:?}] {}:{} {} — {}\n",
+                    finding.verdict, finding.file, finding.line, finding.rule_id, finding.message
+                ));
+            }
+            out
+        }
+    };
+
+    if let Some(path) = flags.get("out") {
+        std::fs::write(path, &document)
+            .map_err(|e| CliError::Check(format!("Cannot write '{}': {}", path, e)))?;
+        println!("Wrote {} report to {}", emit, path);
+    } else {
+        println!("{}", document);
+    }
+
+    if report.summary.needs_rewrite > 0 {
+        eprintln!(
+            "Portability gate: {} breaking finding(s) need a rewrite",
+            report.summary.needs_rewrite
+        );
+        return Ok(1);
+    }
+    Ok(0)
 }
 
 async fn cmd_test_graph(
@@ -1061,6 +1441,8 @@ async fn main() {
         {
             ["validate"] => cmd_validate(&opts, &flags).await,
             ["aura", "analyze"] => cmd_aura_analyze(&opts, &flags).await,
+            ["aura", "migrate"] => cmd_aura_migrate(&opts, &flags).await,
+            ["portability", "scan"] => cmd_portability_scan(&opts, &flags).await,
             ["test", "graph"] => cmd_test_graph(&opts, &flags).await,
             ["schema", "export"] => cmd_schema_export(&opts, &flags).await,
             ["schema", "diff"] => cmd_schema_diff(&opts, &flags).await,

@@ -1,9 +1,7 @@
 use crate::error::IngestError;
 use crate::record::SourceProfile;
 use relating_ai::{AiProvider, ChatMessage, ChatRequest};
-use relating_core::{
-    EntityDefinition, OntologySchema, PropertyDefinition, RelationshipDefinition,
-};
+use relating_core::{EntityDefinition, OntologySchema, PropertyDefinition, RelationshipDefinition};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -67,7 +65,8 @@ Output ONLY valid JSON matching this exact structure:
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: "You are an expert graph architect. Respond only with valid JSON.".to_string(),
+                content: "You are an expert graph architect. Respond only with valid JSON."
+                    .to_string(),
             },
             ChatMessage {
                 role: "user".to_string(),
@@ -102,14 +101,20 @@ Output ONLY valid JSON matching this exact structure:
 
             if let Ok(schema) = serde_json::from_str::<OntologySchema>(json_str) {
                 if !schema.entities.is_empty() {
-                    info!("AI successfully proposed ontology with {} entities", schema.entities.len());
+                    info!(
+                        "AI successfully proposed ontology with {} entities",
+                        schema.entities.len()
+                    );
                     return Ok(schema);
                 }
             }
             warn!("AI response was not valid ontology JSON. Using rule-based fallback.");
         }
         Err(e) => {
-            warn!("AI ontology call failed ({}). Using rule-based fallback.", e);
+            warn!(
+                "AI ontology call failed ({}). Using rule-based fallback.",
+                e
+            );
         }
     }
 

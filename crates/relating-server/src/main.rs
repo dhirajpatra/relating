@@ -38,6 +38,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         info!("Aura: no .env connection ({})", aura_status.reason);
     }
+    if relating_server::api_token_from_env().is_some() {
+        info!("Auth: RELATING_API_TOKEN is set; /api/v1 (except /health) requires a bearer token");
+    } else {
+        info!("Auth: no RELATING_API_TOKEN; the API is open (bind to loopback only)");
+    }
 
     // 2. Load configurations
     let port: u16 = std::env::var("RELATING_PORT")

@@ -16,6 +16,7 @@ fn status_to_str(status: &MigrationStatus) -> &'static str {
         MigrationStatus::Completed => "completed",
         MigrationStatus::Failed => "failed",
         MigrationStatus::Verified => "verified",
+        MigrationStatus::RolledBack => "rolled_back",
     }
 }
 
@@ -29,6 +30,7 @@ fn status_from_str(s: &str) -> MigrationStatus {
         "completed" => MigrationStatus::Completed,
         "failed" => MigrationStatus::Failed,
         "verified" => MigrationStatus::Verified,
+        "rolled_back" => MigrationStatus::RolledBack,
         _ => MigrationStatus::Draft,
     }
 }

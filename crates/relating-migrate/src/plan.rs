@@ -6,6 +6,11 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_BATCH_SIZE: usize = 500;
 
+/// Batches above this size can hit Aura transaction memory/time limits on
+/// wide rows. Plans with larger batches carry a warning; the API still
+/// clamps to 5000 so callers can tune deliberately.
+pub const MAX_RECOMMENDED_BATCH_SIZE: usize = 1000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchKind {
@@ -60,6 +65,11 @@ pub struct MigrationPlan {
     /// overwrite/full-refresh mode in this release.
     #[serde(default)]
     pub destructive: bool,
+    /// Tier spec the plan was capacity-checked against (`free`,
+    /// `professional-4gb`, `<N>gb`, ...). None means no capacity pre-flight
+    /// ran; later dry-runs re-check against this same spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aura_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,6 +189,13 @@ pub fn build_plan(
         );
     }
 
+    if batch_size > MAX_RECOMMENDED_BATCH_SIZE {
+        warnings.push(format!(
+            "Batch size {} exceeds the recommended {}: large batches can hit Aura transaction memory/time limits on wide rows; lower it if execute fails",
+            batch_size, MAX_RECOMMENDED_BATCH_SIZE
+        ));
+    }
+
     let total_batches = node_batches.iter().map(|b| b.batch_count).sum::<usize>()
         + rel_batches.iter().map(|b| b.batch_count).sum::<usize>();
 
@@ -193,6 +210,8 @@ pub fn build_plan(
         write_mode: default_write_mode(),
         write_semantics: default_write_semantics(),
         destructive: false,
+        // Set by preview_migration_with_options when the caller names a tier.
+        aura_tier: None,
     })
 }
 

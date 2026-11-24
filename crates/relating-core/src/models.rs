@@ -28,20 +28,15 @@ impl std::fmt::Display for ProjectId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiProviderType {
     Openai,
     Ollama,
     Anthropic,
+    #[default]
     Mock,
     MetaApi,
-}
-
-impl Default for AiProviderType {
-    fn default() -> Self {
-        Self::Mock
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,18 +189,13 @@ impl std::fmt::Display for SourceId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceStatus {
+    #[default]
     Pending,
     Processed,
     Failed,
-}
-
-impl Default for SourceStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,18 +252,13 @@ impl std::fmt::Display for OntologyId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OntologyStatus {
+    #[default]
     Proposed,
     Approved,
     Rejected,
-}
-
-impl Default for OntologyStatus {
-    fn default() -> Self {
-        Self::Proposed
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -431,18 +416,13 @@ pub struct Chunk {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RetrievalStrategy {
     Vector,
     Keyword,
+    #[default]
     Hybrid,
-}
-
-impl Default for RetrievalStrategy {
-    fn default() -> Self {
-        Self::Hybrid
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -617,9 +597,10 @@ impl std::fmt::Display for MigrationId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MigrationStatus {
+    #[default]
     Draft,
     Analyzed,
     Planned,
@@ -629,12 +610,9 @@ pub enum MigrationStatus {
     Completed,
     Failed,
     Verified,
-}
-
-impl Default for MigrationStatus {
-    fn default() -> Self {
-        Self::Draft
-    }
+    /// Records created by the migration were removed again via rollback.
+    /// Property updates on pre-existing target records are not reverted.
+    RolledBack,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

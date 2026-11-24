@@ -271,7 +271,13 @@ impl Neo4jBackend for BoltBackend {
 struct MockState {
     writes: Vec<(String, BTreeMap<String, BoltValue>)>,
     node_uids: HashMap<String, std::collections::HashSet<String>>,
-    rel_counts: HashMap<String, u64>,
+    /// Stored node properties by (label, uid), for sample read-back.
+    node_props: HashMap<(String, String), BTreeMap<String, BoltValue>>,
+    /// Relationship uids by type: uid-keyed MERGE deduplicates like Neo4j.
+    rel_uids: HashMap<String, std::collections::HashSet<String>>,
+    /// Migration tags by (label, uid) and (type, uid) for rollback tests.
+    node_tags: HashMap<(String, String), String>,
+    rel_tags: HashMap<(String, String), String>,
     scripted_reads: HashMap<String, Vec<Vec<BoltValue>>>,
     scripted_columns: HashMap<String, Vec<String>>,
 }
@@ -378,6 +384,27 @@ fn extract_label(query: &str) -> Option<String> {
     None
 }
 
+/// Extract the relationship type from a `-[r:Type]->` pattern: the first
+/// identifier after the `-[" bracket. Returns None for typeless patterns.
+fn extract_rel_type(query: &str) -> Option<String> {
+    let bracket = query.find("-[")?;
+    let after = &query[bracket + 2..];
+    let colon = after.find(':')?;
+    let mut rest = after[colon + 1..].trim_start();
+    if let Some(stripped) = rest.strip_prefix('`') {
+        let end = stripped.find('`')?;
+        return Some(stripped[..end].to_string());
+    }
+    rest = rest.trim_start();
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
+    }
+    Some(rest[..end].to_string())
+}
+
 #[async_trait]
 impl Neo4jBackend for MockNeo4jBackend {
     async fn test_connection(&self) -> Result<TargetInfo, MigrateError> {
@@ -392,7 +419,7 @@ impl Neo4jBackend for MockNeo4jBackend {
     async fn run_read(
         &self,
         query: &str,
-        _params: BTreeMap<String, BoltValue>,
+        params: BTreeMap<String, BoltValue>,
     ) -> Result<Vec<Vec<BoltValue>>, MigrateError> {
         if self.fail_reads {
             return Err(MigrateError::Connection("mock read failure".to_string()));
@@ -403,19 +430,60 @@ impl Neo4jBackend for MockNeo4jBackend {
                 return Ok(rows.clone());
             }
         }
+        // Sample read-back: one stored node by label + uid.
+        if query.contains("RETURN n AS node") {
+            if let (Some(label), Some(uid)) = (
+                extract_label(query),
+                params.get("uid").and_then(|v| v.as_str()),
+            ) {
+                if let Some(props) = state.node_props.get(&(label.clone(), uid.to_string())) {
+                    let node = crate::packstream::BoltNode {
+                        id: 1,
+                        labels: vec![label],
+                        props: props.clone(),
+                    };
+                    return Ok(vec![vec![BoltValue::Node(node)]]);
+                }
+            }
+            return Ok(Vec::new());
+        }
+        // Label uid listing for content-hash verification.
+        if query.contains("RETURN n.uid") {
+            if let Some(label) = extract_label(query) {
+                let mut uids: Vec<String> = state
+                    .node_uids
+                    .get(&label)
+                    .map(|s| s.iter().cloned().collect())
+                    .unwrap_or_default();
+                uids.sort();
+                return Ok(uids
+                    .into_iter()
+                    .map(|uid| vec![BoltValue::String(uid)])
+                    .collect());
+            }
+            return Ok(Vec::new());
+        }
         // Answer count queries from recorded MERGE batches.
         if query.to_lowercase().contains("count(") {
-            if let Some(label) = extract_label(query) {
-                let is_rel = query.contains("-[");
-                let count = if is_rel {
-                    state.rel_counts.get(&label).copied().unwrap_or(0)
-                } else {
-                    state
-                        .node_uids
-                        .get(&label)
+            if query.contains("-[") {
+                // Relationship or degree count: keyed by relationship type.
+                // (The mock stores no endpoint labels, so a per-label degree
+                // count answers the type total — exact for single-label tests.)
+                let rel_type = extract_rel_type(query).or_else(|| extract_label(query));
+                if let Some(rel_type) = rel_type {
+                    let count = state
+                        .rel_uids
+                        .get(&rel_type)
                         .map(|s| s.len() as u64)
-                        .unwrap_or(0)
-                };
+                        .unwrap_or(0);
+                    return Ok(vec![vec![BoltValue::Int(count as i64)]]);
+                }
+            } else if let Some(label) = extract_label(query) {
+                let count = state
+                    .node_uids
+                    .get(&label)
+                    .map(|s| s.len() as u64)
+                    .unwrap_or(0);
                 return Ok(vec![vec![BoltValue::Int(count as i64)]]);
             }
         }
@@ -431,36 +499,114 @@ impl Neo4jBackend for MockNeo4jBackend {
         state.writes.push((query.to_string(), params.clone()));
 
         let mut stats = BTreeMap::new();
-        let batch_rows = match params.get("batch") {
-            Some(BoltValue::List(rows)) => rows.len(),
-            _ => 0,
-        };
+        // Rollback deletes: remove records carrying the migration tag.
+        if query.contains("DELETE") {
+            let mid = params.get("mid").and_then(|v| v.as_str()).unwrap_or("");
+            if query.contains("DETACH DELETE") {
+                let tagged: Vec<(String, String)> = state
+                    .node_tags
+                    .iter()
+                    .filter(|(_, tag)| tag.as_str() == mid)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                let deleted = tagged.len() as i64;
+                for (label, uid) in tagged {
+                    state.node_tags.remove(&(label.clone(), uid.clone()));
+                    state.node_props.remove(&(label.clone(), uid.clone()));
+                    if let Some(set) = state.node_uids.get_mut(&label) {
+                        set.remove(&uid);
+                    }
+                }
+                stats.insert("nodes-deleted".to_string(), BoltValue::Int(deleted));
+            } else {
+                let tagged: Vec<(String, String)> = state
+                    .rel_tags
+                    .iter()
+                    .filter(|(_, tag)| tag.as_str() == mid)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                let deleted = tagged.len() as i64;
+                for (rel_type, uid) in tagged {
+                    state.rel_tags.remove(&(rel_type.clone(), uid.clone()));
+                    if let Some(set) = state.rel_uids.get_mut(&rel_type) {
+                        set.remove(&uid);
+                    }
+                }
+                stats.insert("relationships-deleted".to_string(), BoltValue::Int(deleted));
+            }
+            let mut meta = BTreeMap::new();
+            meta.insert("stats".to_string(), BoltValue::Map(stats));
+            return Ok(meta);
+        }
         if query.contains("UNWIND") && query.contains("MERGE (n:") {
             if let Some(label) = extract_label(query) {
-                let set = state.node_uids.entry(label).or_default();
-                let before = set.len();
+                let mid = params
+                    .get("mid")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let mut created = 0i64;
                 if let Some(BoltValue::List(rows)) = params.get("batch") {
                     for row in rows {
                         if let BoltValue::Map(map) = row {
                             if let Some(BoltValue::String(uid)) = map.get("uid") {
-                                set.insert(uid.clone());
+                                let is_new = state
+                                    .node_uids
+                                    .entry(label.clone())
+                                    .or_default()
+                                    .insert(uid.clone());
+                                if is_new {
+                                    created += 1;
+                                    // ON CREATE tagging: only fresh nodes are stamped.
+                                    if let Some(mid) = mid.clone() {
+                                        state.node_tags.insert((label.clone(), uid.clone()), mid);
+                                    }
+                                }
+                                if let Some(BoltValue::Map(props)) = map.get("props") {
+                                    state
+                                        .node_props
+                                        .insert((label.clone(), uid.clone()), props.clone());
+                                }
                             }
                         }
                     }
                 }
-                stats.insert(
-                    "nodes-created".to_string(),
-                    BoltValue::Int((set.len() - before) as i64),
-                );
+                stats.insert("nodes-created".to_string(), BoltValue::Int(created));
             }
         } else if query.contains("UNWIND") && query.contains("MERGE (s)-[") {
             if let Some(rel_type) = extract_label(query) {
-                let entry = state.rel_counts.entry(rel_type).or_insert(0);
-                *entry += batch_rows as u64;
-                stats.insert(
-                    "relationships-created".to_string(),
-                    BoltValue::Int(batch_rows as i64),
-                );
+                let mid = params
+                    .get("mid")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let mut created = 0i64;
+                if let Some(BoltValue::List(rows)) = params.get("batch") {
+                    for row in rows {
+                        if let BoltValue::Map(map) = row {
+                            // Uid-keyed MERGE: only unseen uids are created.
+                            // Rows without a uid keep the legacy count-each
+                            // behavior so direct mock callers stay honest.
+                            match map.get("uid").and_then(|v| v.as_str()) {
+                                Some(uid) => {
+                                    let is_new = state
+                                        .rel_uids
+                                        .entry(rel_type.clone())
+                                        .or_default()
+                                        .insert(uid.to_string());
+                                    if is_new {
+                                        created += 1;
+                                        if let Some(mid) = mid.clone() {
+                                            state
+                                                .rel_tags
+                                                .insert((rel_type.clone(), uid.to_string()), mid);
+                                        }
+                                    }
+                                }
+                                None => created += 1,
+                            }
+                        }
+                    }
+                }
+                stats.insert("relationships-created".to_string(), BoltValue::Int(created));
             }
         }
         let mut meta = BTreeMap::new();
@@ -512,6 +658,19 @@ mod tests {
         let msg = format_db_not_found("wrongdb", None);
         assert!(msg.contains("'wrongdb'"), "{}", msg);
         assert!(msg.contains("SHOW DATABASES"), "{}", msg);
+    }
+
+    #[test]
+    fn test_extract_rel_type_prefers_bracket_pattern() {
+        assert_eq!(
+            extract_rel_type("MATCH (n:`Person`)-[r:`KNOWS`]->() RETURN count(r)"),
+            Some("KNOWS".to_string())
+        );
+        assert_eq!(
+            extract_rel_type("MATCH ()-[r:KNOWS]->() RETURN count(r)"),
+            Some("KNOWS".to_string())
+        );
+        assert_eq!(extract_rel_type("MATCH (n:Person) RETURN n"), None);
     }
 
     /// End-to-end over the wire: a `DatabaseNotFound` on `BEGIN` triggers the

@@ -19,7 +19,7 @@ Its core capabilities include:
 - **Hybrid GraphRAG & Evaluation:** Combine vector search, full-text search, and Cypher graph traversal via Reciprocal Rank Fusion (RRF) to deliver grounded answers with traceable citations and evaluation metrics:
   $$\text{RRF}(d) = \sum_{r \in R} \frac{1}{k + \text{rank}_r(d)}$$
 - **Mandatory AI Service:** Integrate configurable local (Ollama) and hosted (OpenAI-compatible) AI providers for reasoning, embeddings, extraction, reranking, and evaluation.
-- **Neo4j Aura Migration & Zero-Rewrite Backend Flip:** Run pre-flight compatibility and vector-index fit checks, preview dry-run plans, execute idempotent merge-upsert transfers over Bolt, verify counts and constraints, and flip applications between Relate and Neo4j Aura without rewriting a single query.
+- **Neo4j Aura Migration & Zero-Rewrite Backend Flip:** Run pre-flight compatibility, vector-index, and tier-capacity fit checks, preview dry-run plans, execute idempotent merge-upsert transfers over Bolt, verify counts, content hashes, degrees, and constraints, roll back exactly what a migration created, and flip applications between Relate and Neo4j Aura without rewriting a single query.
 - **Graph DevOps & Portability Engine:** Manage schema-as-code revisions and diffs, scan repositories with the Portability Compiler, run CI/CD validation gates via the `relating` CLI and GitHub Actions, replay shadow traffic across backends, generate synthetic fixtures, and get sizing/performance recommendations.
 - **MCP Integration:** Expose project-scoped read-only tools (and policy-gated write tools) over stdio and Streamable HTTP so developer tools and AI agents such as Claude Code, Codex, and Cursor can connect safely.
 
@@ -27,13 +27,13 @@ Relating is designed to remain a complete graph development and GraphRAG platfor
 
 ## How we built it
 
-We built a modular monolith combining Rust, React, TypeScript, and isolated Python document workers across 15 specialized crates and a 12-tab workbench:
+We built a modular monolith combining Rust, React, and TypeScript across 16 specialized crates and a 12-tab workbench:
 
 - **Rust + Axum + Tokio:** Backend control plane, REST API, policy enforcement, shadow replay, portability compiler, and Bolt migration engine (`relating-core`, `relating-server`, `relating-migrate`, `relating-portability`, `relating-shadow`, `relating-advisor`).
 - **Relate & `GraphBackend` Abstraction:** Embedded project-scoped Relate stores (`.rl` / directory stores) behind a unified `GraphBackend` interface (`RelateBackend` and `Neo4jBackend`) that enables seamless Relate $\leftrightarrow$ Aura cutover.
 - **React + TypeScript + Cytoscape.js:** A 12-tab developer workbench covering Sources, Ontology, Graph Explorer, Cypher Console, AI Service, Retrieval & Q&A, Agents, Aura Migration, Schema & Contracts, Portability, Shadow & Debug, and Test Data & Advisor.
 - **AI Provider Abstraction (`relating-ai`):** Required provider adapters for chat, embeddings, structured extraction, reranking, and LLM-as-a-judge evaluation, isolating embedding profiles by model ID, modality, and vector dimension $d$.
-- **Python Workers (`relating-ingest`):** Isolated parsing and chunking pipelines for PDF, DOCX, CSV, JSON, and unstructured text with row/chunk provenance.
+- **Rust ingestion pipelines (`relating-ingest`):** Native parsing and chunking for PDF, DOCX, CSV, JSON, and unstructured text with row/chunk provenance. (SKILL.md reserves an optional isolated-Python-worker interface for future AI/data-library needs; nothing in the current pipeline shells out to Python.)
 - **SQLite & PostgreSQL Metadata:** Local SQLite persistence alongside team PostgreSQL schema provisioning and validation, paired with runtime secret resolution via environment variables, mounted secret files, or the OS keychain.
 - **MCP & CLI (`relating-mcp`, `relating-cli`):** Standardized stdio/HTTP MCP server and headless CLI for CI/CD gates, contract tests, and debugging.
 - **Docker:** One-command local startup (`./start.sh`) and reproducible `docker compose` deployment.
@@ -44,7 +44,7 @@ Building an end-to-end path from local embedded graph prototyping to cloud Aura 
 
 - **Bridging Relate and Neo4j Aura Without Query Rewrites:** Embedded Relate and Neo4j Aura differ in index DDL, constraint syntax, vector index rules, and tier memory limits. We had to build a versioned capability registry (`SUPPORTED`, `RECREATE`, `TRANSFORM`, `UNSUPPORTED`, `REQUIRES_MANUAL_REVIEW`), a Portability Compiler, and pre-flight Aura vector-index fit checks so developers catch incompatibilities before deployment.
 - **Preventing Vector Space Corruption:** Supporting multiple embedding models across prose, tables, and code risked mixing incompatible embeddings. We enforced strict profile isolation so cosine similarity $\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\| \|\mathbf{v}\|}$ is only ever computed within matching `(provider, model_id, dimensions)` spaces.
-- **Safe, Repeatable Cloud Migrations:** Startups rarely perform a single one-time cutover; they iterate locally and sync updates to staging/production. Designing resumable, idempotent merge-upsert batch transfers over Bolt—complete with dry-run gates, explicit disclosure of target mutations, count/sample verification, and audit manifests—required strict state boundaries.
+- **Safe, Repeatable Cloud Migrations:** Startups rarely perform a single one-time cutover; they iterate locally and sync updates to staging/production. Designing resumable, idempotent merge-upsert batch transfers over Bolt—complete with dry-run gates, explicit disclosure of target mutations, count/hash/degree/sample verification, tagged rollback, and audit manifests—required strict state boundaries.
 - **Multi-Format Ingestion with Provenance:** Parsing CSV, JSON, PDF, and DOCX files while maintaining exact source-to-node lineage and transparent, editable ontology proposals required decoupling document parsing from schema-constrained AI extraction.
 - **Secure Agent Access & Team Secret Hygiene:** Exposing graph tools to external coding agents over MCP without leaking Aura credentials or allowing unrestricted graph mutations meant enforcing project-scoped read-only defaults, bounded query limits, and runtime secret resolution via OS keychains and mounted files rather than committing secrets.
 

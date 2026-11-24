@@ -15,11 +15,40 @@ MODE="${1:-relating-server}"
 DATA_DIR="${RELATING_DATA_DIR:-/app/data}"
 mkdir -p "$DATA_DIR"
 
+# Percent-encode a URL userinfo part (username/password): everything except
+# unreserved characters becomes %XX, so `@`, `:`, `/` and friends in a
+# password cannot break the connection-string parse.
+urlencode_userinfo() {
+    # $1: raw string. POSIX sh, no external tools.
+    raw="$1"
+    out=""
+    i=1
+    len=${#raw}
+    while [ "$i" -le "$len" ]; do
+        ch=$(printf '%s' "$raw" | cut -c "$i")
+        case "$ch" in
+            [A-Za-z0-9_.~-]) out="${out}${ch}" ;;
+            *) out="${out}$(printf '%%%02X' "'$ch")" ;;
+        esac
+        i=$((i + 1))
+    done
+    printf '%s' "$out"
+}
+
 if [ "$MODE" = "db-init" ]; then
     PG_URL="${RELATING_POSTGRES_URL:-}"
     if [ -z "$PG_URL" ]; then
-        echo "db-init: RELATING_POSTGRES_URL is not set" >&2
-        exit 2
+        # Build from parts so passwords with `@`, `:` or `/` stay safe.
+        PG_USER="${POSTGRES_USER:-relating}"
+        PG_PASS="${POSTGRES_PASSWORD:-relating}"
+        PG_DB="${POSTGRES_DB:-relating}"
+        PG_HOST="${PGHOST:-postgres}"
+        PG_PORT="${PGPORT:-5432}"
+        if [ -z "$PG_PASS" ]; then
+            echo "db-init: POSTGRES_PASSWORD (or RELATING_POSTGRES_URL) is not set" >&2
+            exit 2
+        fi
+        PG_URL="postgres://$(urlencode_userinfo "$PG_USER"):$(urlencode_userinfo "$PG_PASS")@${PG_HOST}:${PG_PORT}/${PG_DB}"
     fi
     # init-postgres is idempotent, so retrying until Postgres accepts
     # connections is safe. check-postgres is read-only validation.

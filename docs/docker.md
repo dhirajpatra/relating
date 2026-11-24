@@ -1,22 +1,33 @@
 # Docker Compose — Runbook
 
-One command starts the whole stack: the workbench server, team Postgres,
-and local Ollama AI.
+One command starts the server (SQLite runtime store — enough to run the
+app and migrate to Aura):
 
 ```bash
 docker compose up --build
 ```
 
-Then open http://127.0.0.1:8080 in your browser.
+Then open http://127.0.0.1:8080 in your browser. Postgres, Ollama, and
+the local Neo4j stand-in are opt-in profiles so a migration-only user
+never pulls multi-GB models or databases first:
+
+```bash
+docker compose --profile postgres up --build      # team Postgres + db-init job
+docker compose --profile ollama up --build        # local Ollama models
+docker compose --profile neo4j up                 # local Bolt target for testing
+```
+
+Combine profiles for the full stack. All published ports bind to
+127.0.0.1 only.
 
 ## Services
 
 | Service    | Folder               | What it is | Default port |
 |------------|----------------------|------------|--------------|
-| `server`   | `docker/server/`     | Axum API + React workbench + MCP HTTP transport; SQLite runtime store at `/app/data` | 8080 |
-| `db-init`  | (uses server image)  | One-shot job: `relating db init-postgres` + `db check-postgres` against `postgres`; idempotent | — |
-| `postgres` | `docker/postgres/`   | Team Postgres 17 for the shared metadata schema (see `docs/postgres.md`) | 5432 |
-| `ollama`   | `docker/ollama/`     | Local AI backend; pre-pulls chat + embedding models on first start | 11434 |
+| `server`   | `docker/server/`     | Axum API + React workbench + MCP HTTP transport; SQLite runtime store at `/app/data`; runs as non-root | 8080 |
+| `db-init`  | (uses server image)  | One-shot job (`postgres` profile): `relating db init-postgres` + `db check-postgres` against `postgres`; idempotent; percent-encodes the password | — |
+| `postgres` | `docker/postgres/`   | Opt-in (`--profile postgres`): team Postgres 17 for the shared metadata schema (see `docs/postgres.md`) | 5432 |
+| `ollama`   | `docker/ollama/`     | Opt-in (`--profile ollama`): local AI backend; pre-pulls chat + embedding models on first start | 11434 |
 | `neo4j`    | `docker/neo4j/`      | Opt-in only (`--profile neo4j`): local Bolt target for testing the Aura migration flow | 7474 / 7687 |
 
 Each service builds from its own folder with its own Dockerfile. `db-init`

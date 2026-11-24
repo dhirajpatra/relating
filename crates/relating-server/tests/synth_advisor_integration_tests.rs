@@ -21,6 +21,7 @@ async fn setup_test_app() -> (axum::Router, tempfile::TempDir) {
         pool,
         graph: Arc::new(RelateBackend::new()),
         data_dir: dir.path().to_path_buf(),
+        api_token: None,
     };
     let app = create_router(state);
     (app, dir)
@@ -251,7 +252,10 @@ async fn test_advisor_vector_sizing_checks_tier_fit() {
         report["sizing"]["vectors"]["total_vector_bytes"],
         10_000 * 768 * 4
     );
-    assert_eq!(report["sizing"]["vectors"]["fits"][0]["verdict"], "SUPPORTED");
+    assert_eq!(
+        report["sizing"]["vectors"]["fits"][0]["verdict"],
+        "SUPPORTED"
+    );
 
     // Oversized dimensions are flagged without needing a tier.
     let (status, report) = post_json(
@@ -264,7 +268,10 @@ async fn test_advisor_vector_sizing_checks_tier_fit() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(report["sizing"]["vectors"]["fits"][0]["verdict"], "UNSUPPORTED");
+    assert_eq!(
+        report["sizing"]["vectors"]["fits"][0]["verdict"],
+        "UNSUPPORTED"
+    );
 
     // Unknown tiers are rejected with the valid choices.
     let (status, err) = post_json(
@@ -278,5 +285,8 @@ async fn test_advisor_vector_sizing_checks_tier_fit() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(err["error"]["message"].as_str().unwrap().contains("mystery-tier"));
+    assert!(err["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("mystery-tier"));
 }

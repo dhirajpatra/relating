@@ -126,6 +126,94 @@ pub fn build_report(scan: &RepoScan) -> PortableReport {
     }
 }
 
+fn sarif_level(verdict: PortVerdict) -> &'static str {
+    match verdict {
+        PortVerdict::Portable => "none",
+        PortVerdict::Transform => "note",
+        PortVerdict::NeedsReview => "warning",
+        PortVerdict::NeedsRewrite => "error",
+    }
+}
+
+fn sarif_rule_name(rule_id: &str) -> &'static str {
+    match rule_id {
+        "R-APOC" => "APOC / procedure availability",
+        "R-PROC" => "Custom procedure portability",
+        "R-PERIODIC" => "USING PERIODIC COMMIT rewrite",
+        "R-LOADCSV" => "LOAD CSV path portability",
+        "R-SHORTEST" => "Shortest-path semantics review",
+        "R-SUBQUERY" => "CALL subquery version review",
+        "R-NOPARAMS" => "Query parameterization",
+        "R-MULTI" => "Multi-statement transaction review",
+        "R-DDL-OLD" => "Legacy constraint syntax",
+        "R-DRIVER" => "Driver import portability",
+        "R-URI" => "Encrypted Bolt URI",
+        "R-TX" => "Explicit transaction usage",
+        "R-DDL" => "Inline schema DDL",
+        _ => "Portable Cypher",
+    }
+}
+
+/// Render the report as SARIF 2.1.0 so findings show up as code-scanning
+/// alerts (upload with `github/codeql-action/upload-sarif`, or open in any
+/// SARIF viewer). Only non-portable findings become results; portable files
+/// are omitted to keep the alert list actionable.
+pub fn to_sarif(report: &PortableReport) -> serde_json::Value {
+    use std::collections::BTreeMap;
+    let mut rules: BTreeMap<String, &PortFinding> = BTreeMap::new();
+    for finding in &report.findings {
+        if finding.verdict != PortVerdict::Portable {
+            rules.entry(finding.rule_id.clone()).or_insert(finding);
+        }
+    }
+    let rules_json: Vec<serde_json::Value> = rules
+        .iter()
+        .map(|(rule_id, sample)| {
+            serde_json::json!({
+                "id": rule_id,
+                "name": sarif_rule_name(rule_id),
+                "shortDescription": {"text": sample.message},
+            })
+        })
+        .collect();
+    let results: Vec<serde_json::Value> = report
+        .findings
+        .iter()
+        .filter(|f| f.verdict != PortVerdict::Portable)
+        .map(|finding| {
+            serde_json::json!({
+                "ruleId": finding.rule_id,
+                "level": sarif_level(finding.verdict),
+                "message": {"text": finding.message},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": finding.file},
+                        "region": {"startLine": finding.line.max(1)}
+                    }
+                }],
+                "fixes": finding.remediation.as_ref().map(|text| {
+                    serde_json::json!([{"description": {"text": text}}])
+                }).unwrap_or(serde_json::json!([])),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "relating-portability",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "informationUri": "https://github.com/dhirajpatra/relating",
+                    "rules": rules_json,
+                }
+            },
+            "results": results,
+        }],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +260,26 @@ mod tests {
             "MATCH (n) WHERE n.note = 'please CREATE me' RETURN n"
         ));
         assert!(!is_read_only("MATCH (n) SET n.x = 1"));
+    }
+
+    #[test]
+    fn test_sarif_reports_only_actionable_findings() {
+        let scan = scan_with(vec![
+            "MATCH (n) RETURN n",
+            "USING PERIODIC COMMIT 100 LOAD CSV FROM 'f' AS r CREATE (n:N)",
+        ]);
+        let report = build_report(&scan);
+        let sarif = to_sarif(&report);
+        assert_eq!(sarif["version"], "2.1.0");
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        // The portable query is omitted; the rewrite is an error.
+        assert_eq!(results.len(), 2); // R-PERIODIC + R-LOADCSV
+        assert!(results.iter().any(|r| r["ruleId"] == "R-PERIODIC"
+            && r["level"] == "error"
+            && r["locations"][0]["physicalLocation"]["region"]["startLine"] == 2));
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
+        assert!(rules.iter().any(|r| r["id"] == "R-PERIODIC"));
     }
 }

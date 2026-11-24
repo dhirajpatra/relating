@@ -9,7 +9,8 @@ pub use cypher::{extract_features, split_statements, CypherFeatures};
 pub use error::PortError;
 pub use remediation::{rewrite_legacy_constraint, rewrite_periodic_commit};
 pub use report::{
-    build_report, GeneratedTest, PortSummary, PortableReport, TestAssertion, MAX_GENERATED_TESTS,
+    build_report, to_sarif, GeneratedTest, PortSummary, PortableReport, TestAssertion,
+    MAX_GENERATED_TESTS,
 };
 pub use rules::{check_query, check_signal, PortFinding, PortRule, PortVerdict};
 pub use scanner::{

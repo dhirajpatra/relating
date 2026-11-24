@@ -10,7 +10,15 @@
 #   --connection CID  Use this Aura connection id (default: auto-pick when
 #                     exactly one connection is listed, else fail loudly)
 #   --fresh           Delete and rebuild the "aura-fill" project from the
-#                     bundled employee CSVs before migrating
+#                     bundled employee CSVs before migrating (asks for
+#                     confirmation unless --yes is given)
+#   --yes             Non-interactive: approve the migration plan and skip
+#                     the --fresh confirmation. Without it, the script prints
+#                     the plan summary and asks before approving.
+#   --llm-ontology    Propose the seed ontology via the LLM instead of the
+#                     deterministic tests/fixtures/aura-fill-ontology.json
+#                     fixture (the fixture keeps the demo independent of
+#                     model availability).
 #   --no-build        Skip `docker compose build` (reuse existing images)
 #   --up-only         Start the stack and wait for health, then stop without
 #                     migrating (plain start; use `docker compose down` to stop)
@@ -19,21 +27,30 @@
 #   -h, --help        Show this help
 #
 # What it does:
-#   1. `docker compose up -d` (server + postgres + ollama) and waits for
-#      the API to answer health checks.
+#   1. `docker compose up -d` and waits for the API to answer health checks.
+#      The base stack is the server alone (SQLite); add
+#      `--profile postgres --profile ollama` to `docker compose up` first
+#      when the team Postgres or local Ollama models are needed.
 #   2. Resolves the project: --project, else the existing "aura-fill"
 #      project, else creates it and ingests the bundled 24-employee graph
-#      (propose + approve ontology, ingest -> 42 nodes, 72 relationships).
+#      (import the fixed ontology fixture + approve, ingest -> 42 nodes,
+#      72 relationships; --llm-ontology uses an LLM proposal instead).
 #      --fresh forces step 2 from scratch.
 #   3. Resolves the Aura connection (stored or the AURA_URI one from .env),
 #      tests it, then runs the approval-gated migration:
-#      analyze -> plan -> dry-run -> approve -> execute -> verify.
-#      Aborts before approve when the dry run reports blockers.
+#      analyze -> plan -> dry-run -> approve -> execute -> verify -> report.
+#      Aborts before approve when the dry run reports blockers, prints the
+#      plan summary, and requires an interactive "yes" (or --yes).
+#      The final audit report is fetched and written to
+#      migration-<id>-report.json next to this script.
 #
 # Requirements: docker (compose v2), python3, and a .env with AURA_URI plus
 # a resolvable AURA_PASSWORD (see .env.example). LLM calls use Meta when
 # LLM_BACKEND=meta_api is set, with Ollama fallback inside the stack.
 #
+# Platform: bash-only (Linux/macOS). On Windows, run it from WSL2 or
+# Git Bash with Docker Desktop's compose v2 on PATH; native PowerShell is
+# not supported (see README "Windows" notes).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +60,8 @@ FRESH=0
 BUILD=1
 DOWN=0
 UP_ONLY=0
+YES=0
+LLM_ONTO=0
 
 usage() {
     cat <<'EOF'
@@ -56,7 +75,12 @@ Options:
   --connection CID  Use this Aura connection id (default: auto-pick when
                     exactly one connection is listed, else fail loudly)
   --fresh           Delete and rebuild the "aura-fill" project from the
-                    bundled employee CSVs before migrating
+                    bundled employee CSVs before migrating (asks for
+                    confirmation unless --yes is given)
+  --yes             Non-interactive: approve the migration plan and skip
+                    the --fresh confirmation
+  --llm-ontology    Propose the seed ontology via the LLM instead of the
+                    deterministic fixture
   --no-build        Skip `docker compose build` (reuse existing images)
   --up-only         Start the stack and wait for health, then stop without
                     migrating (plain start; use `docker compose down` to stop)
@@ -75,6 +99,8 @@ while [[ $# -gt 0 ]]; do
             [[ $# -lt 2 || -z "${2:-}" ]] && { echo "--connection needs a value" >&2; exit 1; }
             CONNECTION_ID="$2"; shift 2 ;;
         --fresh) FRESH=1; shift ;;
+        --yes) YES=1; shift ;;
+        --llm-ontology) LLM_ONTO=1; shift ;;
         --no-build) BUILD=0; shift ;;
         --up-only) UP_ONLY=1; shift ;;
         --down) DOWN=1; shift ;;
@@ -100,15 +126,18 @@ fi
 export no_proxy="${no_proxy:-},127.0.0.1,localhost"
 export NO_PROXY="${NO_PROXY:-},127.0.0.1,localhost"
 
-# Host-side port comes from .env when set (compose default: 8080).
+# Host-side port and optional API bearer token come from .env when set.
 PORT="8080"
+API_TOKEN=""
 if [[ -f "$ROOT/.env" ]]; then
     ENV_PORT="$(grep -E '^RELATING_PORT=' "$ROOT/.env" | tail -n 1 | cut -d= -f2- | tr -d '[:space:]"'"'" || true)"
     [[ -n "$ENV_PORT" ]] && PORT="$ENV_PORT"
+    API_TOKEN="$(grep -E '^RELATING_API_TOKEN=' "$ROOT/.env" | tail -n 1 | cut -d= -f2- | tr -d '[:space:]"'"'" || true)"
 fi
+[[ -n "${RELATING_API_TOKEN:-}" ]] && API_TOKEN="$RELATING_API_TOKEN"
 API="http://127.0.0.1:${PORT}/api/v1"
 
-echo "==> Starting Relating stack (server + postgres + ollama)..."
+echo "==> Starting Relating stack..."
 if [[ "$BUILD" -eq 1 ]]; then
     (cd "$ROOT" && docker compose up --build -d)
 else
@@ -116,7 +145,8 @@ else
 fi
 
 echo "==> Waiting for the API at ${API}/health ..."
-for _ in $(seq 1 90); do
+API_UP=0
+for attempt in $(seq 1 90); do
     if python3 -c "
 import sys, urllib.request
 h = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -126,15 +156,20 @@ except Exception:
     sys.exit(1)
 "; then
         echo "==> API is up."
+        API_UP=1
         break
     fi
-    sleep 2
-    if [[ "${_}" == "90" ]]; then
+    if [[ "$attempt" == "90" ]]; then
         echo "API did not answer after ~3 minutes. Recent server logs:" >&2
         (cd "$ROOT" && docker compose logs --tail=30 server) >&2
         exit 1
     fi
+    sleep 2
 done
+if [[ "$API_UP" -ne 1 ]]; then
+    echo "API health wait ended without success; aborting." >&2
+    exit 1
+fi
 
 if [[ "$UP_ONLY" -eq 1 ]]; then
     echo "==> Stack is up (--up-only, skipping migration)."
@@ -144,7 +179,7 @@ if [[ "$UP_ONLY" -eq 1 ]]; then
 fi
 
 echo "==> Running migration flow..."
-export MIGRATE_API="$API" MIGRATE_PROJECT="$PROJECT_ID" MIGRATE_CONNECTION="$CONNECTION_ID" MIGRATE_FRESH="$FRESH"
+export MIGRATE_API="$API" MIGRATE_PROJECT="$PROJECT_ID" MIGRATE_CONNECTION="$CONNECTION_ID" MIGRATE_FRESH="$FRESH" MIGRATE_YES="$YES" MIGRATE_TOKEN="$API_TOKEN" MIGRATE_ROOT="$ROOT" MIGRATE_LLM_ONTO="$LLM_ONTO"
 STATUS=0
 python3 <<'PYEOF' || STATUS=$?
 import json, os, sys, urllib.request, urllib.error
@@ -153,33 +188,39 @@ API = os.environ["MIGRATE_API"]
 WANT_PROJECT = os.environ["MIGRATE_PROJECT"] or None
 WANT_CONN = os.environ["MIGRATE_CONNECTION"] or None
 FRESH = os.environ["MIGRATE_FRESH"] == "1"
+AUTO_YES = os.environ.get("MIGRATE_YES") == "1"
+API_TOKEN = os.environ.get("MIGRATE_TOKEN") or ""
+ROOT = os.environ.get("MIGRATE_ROOT") or "."
+LLM_ONTO = os.environ.get("MIGRATE_LLM_ONTO") == "1"
 SEED_NAME = "aura-fill"
+ONTO_FIXTURE = os.path.join(ROOT, "tests", "fixtures", "aura-fill-ontology.json")
 
+# Fictional seed people (no real names): the demo graph shape is unchanged.
 EMP = """name,role,company,city,company_id,role_id,city_id
-Ada Lovelace,Data Engineer,Northwind,Lisbon,Northwind,Data Engineer,Lisbon
-Alan Turing,ML Engineer,Northwind,Lisbon,Northwind,ML Engineer,Lisbon
-Grace Hopper,Backend Engineer,Initech,Porto,Initech,Backend Engineer,Porto
-Linus Torvalds,DevOps Engineer,Initech,Porto,Initech,DevOps Engineer,Porto
-Margaret Hamilton,QA Engineer,Globex,Madrid,Globex,QA Engineer,Madrid
-Tim Berners-Lee,Frontend Engineer,Globex,Madrid,Globex,Frontend Engineer,Madrid
-Barbara Liskov,Data Engineer,Initech,Porto,Initech,Data Engineer,Porto
-Donald Knuth,ML Engineer,Northwind,Coimbra,Northwind,ML Engineer,Coimbra
-Edsger Dijkstra,Backend Engineer,Globex,Madrid,Globex,Backend Engineer,Madrid
-Radia Perlman,DevOps Engineer,Umbrella,Barcelona,Umbrella,DevOps Engineer,Barcelona
-Katherine Johnson,QA Engineer,Umbrella,Barcelona,Umbrella,QA Engineer,Barcelona
-John von Neumann,Frontend Engineer,Northwind,Coimbra,Northwind,Frontend Engineer,Coimbra
-Claude Shannon,Data Engineer,Globex,Valencia,Globex,Data Engineer,Valencia
-Richard Hamming,ML Engineer,Umbrella,Barcelona,Umbrella,ML Engineer,Barcelona
-Frances Allen,Backend Engineer,Northwind,Lisbon,Northwind,Backend Engineer,Lisbon
-Ken Thompson,DevOps Engineer,Globex,Valencia,Globex,DevOps Engineer,Valencia
-Dennis Ritchie,QA Engineer,Initech,Braga,Initech,QA Engineer,Braga
-Bjarne Stroustrup,Frontend Engineer,Umbrella,Seville,Umbrella,Frontend Engineer,Seville
-Guido van Rossum,Data Engineer,Initech,Braga,Initech,Data Engineer,Braga
-Yukihiro Matsumoto,ML Engineer,Globex,Valencia,Globex,ML Engineer,Valencia
-James Gosling,Backend Engineer,Umbrella,Seville,Umbrella,Backend Engineer,Seville
-Anders Hejlsberg,DevOps Engineer,Northwind,Coimbra,Northwind,DevOps Engineer,Coimbra
-Brendan Eich,QA Engineer,Initech,Braga,Initech,QA Engineer,Braga
-Sheryl Sandberg,Frontend Engineer,Globex,Madrid,Globex,Frontend Engineer,Madrid"""
+Mara Ellison,Data Engineer,Northwind,Lisbon,Northwind,Data Engineer,Lisbon
+Tomas Reyes,ML Engineer,Northwind,Lisbon,Northwind,ML Engineer,Lisbon
+Priya Nair,Backend Engineer,Initech,Porto,Initech,Backend Engineer,Porto
+Jonas Weber,DevOps Engineer,Initech,Porto,Initech,DevOps Engineer,Porto
+Sofia Marchetti,QA Engineer,Globex,Madrid,Globex,QA Engineer,Madrid
+Liam Okafor,Frontend Engineer,Globex,Madrid,Globex,Frontend Engineer,Madrid
+Ingrid Solberg,Data Engineer,Initech,Porto,Initech,Data Engineer,Porto
+Mateo Alvarez,ML Engineer,Northwind,Coimbra,Northwind,ML Engineer,Coimbra
+Anya Petrova,Backend Engineer,Globex,Madrid,Globex,Backend Engineer,Madrid
+Felix Andersen,DevOps Engineer,Umbrella,Barcelona,Umbrella,DevOps Engineer,Barcelona
+Nadia Haddad,QA Engineer,Umbrella,Barcelona,Umbrella,QA Engineer,Barcelona
+Oliver Bennett,Frontend Engineer,Northwind,Coimbra,Northwind,Frontend Engineer,Coimbra
+Clara Dubois,Data Engineer,Globex,Valencia,Globex,Data Engineer,Valencia
+Henrik Larsen,ML Engineer,Umbrella,Barcelona,Umbrella,ML Engineer,Barcelona
+Elena Popescu,Backend Engineer,Northwind,Lisbon,Northwind,Backend Engineer,Lisbon
+David Kimura,DevOps Engineer,Globex,Valencia,Globex,DevOps Engineer,Valencia
+Sara Lindqvist,QA Engineer,Initech,Braga,Initech,QA Engineer,Braga
+Rafael Costa,Frontend Engineer,Umbrella,Seville,Umbrella,Frontend Engineer,Seville
+Amara Diallo,Data Engineer,Initech,Braga,Initech,Data Engineer,Braga
+Kenji Tanaka,ML Engineer,Globex,Valencia,Globex,ML Engineer,Valencia
+Isabel Ferreira,Backend Engineer,Umbrella,Seville,Umbrella,Backend Engineer,Seville
+Viktor Novak,DevOps Engineer,Northwind,Coimbra,Northwind,DevOps Engineer,Coimbra
+Hannah Müller,QA Engineer,Initech,Braga,Initech,QA Engineer,Braga
+Diego Santos,Frontend Engineer,Globex,Madrid,Globex,Frontend Engineer,Madrid"""
 CO = "name\nNorthwind\nInitech\nGlobex\nUmbrella"
 CITY = "name\nLisbon\nPorto\nMadrid\nCoimbra\nBarcelona\nValencia\nBraga\nSeville"
 ROLE = "title\nData Engineer\nML Engineer\nBackend Engineer\nFrontend Engineer\nDevOps Engineer\nQA Engineer"
@@ -190,8 +231,11 @@ opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 def api(method, path, body=None, timeout=300):
     data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["Authorization"] = "Bearer " + API_TOKEN
     req = urllib.request.Request(API + path, data=data, method=method,
-                                 headers={"Content-Type": "application/json"})
+                                 headers=headers)
     try:
         with opener.open(req, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read().decode() or "{}")
@@ -208,6 +252,20 @@ def die(msg):
 def step(msg):
     print("--- " + msg)
 
+def confirm(prompt):
+    """Interactive yes/no. Returns True only on an explicit yes; auto-yes
+    skips the prompt, and non-interactive stdin refuses (fail closed)."""
+    if AUTO_YES:
+        print("%s [auto-yes]" % prompt)
+        return True
+    if not sys.stdin.isatty():
+        return False
+    try:
+        answer = input("%s [y/N] " % prompt).strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
 # 1. Resolve the project.
 pid = WANT_PROJECT
 if pid is None:
@@ -216,6 +274,8 @@ if pid is None:
         die("listing projects failed: %s" % projects)
     match = next((p for p in projects if p.get("name") == SEED_NAME), None)
     if match and FRESH:
+        if not confirm("Delete and rebuild the existing '%s' project?" % SEED_NAME):
+            die("--fresh refused: re-run with --yes or answer 'yes' at the prompt")
         step("deleting existing '%s' (--fresh)" % SEED_NAME)
         s, _ = api("DELETE", "/projects/%s" % match["id"])
         if s != 204:
@@ -239,11 +299,24 @@ if pid is None:
                           "content_type": "text/csv"})
             if s not in (200, 201):
                 die("registering %s failed: %s" % (fname, src))
-        step("proposing + approving ontology (uses the configured LLM)")
-        s, onto = api("POST", "/projects/%s/ontology/propose" % pid,
-                      {"domain_hint": "company employees with roles across cities"})
-        if s not in (200, 201):
-            die("ontology propose failed: %s" % str(onto)[:400])
+        if LLM_ONTO:
+            step("proposing + approving ontology (uses the configured LLM)")
+            s, onto = api("POST", "/projects/%s/ontology/propose" % pid,
+                          {"domain_hint": "company employees with roles across cities"})
+            if s not in (200, 201):
+                die("ontology propose failed: %s" % str(onto)[:400])
+        else:
+            step("importing + approving fixed ontology fixture (deterministic)")
+            try:
+                with open(ONTO_FIXTURE) as fh:
+                    fixture = json.load(fh)
+            except (OSError, ValueError) as e:
+                die("cannot read ontology fixture %s: %s" % (ONTO_FIXTURE, e))
+            fixture.pop("_comment", None)
+            s, onto = api("POST", "/projects/%s/ontology/import" % pid,
+                          {"schema": fixture})
+            if s not in (200, 201):
+                die("ontology import failed: %s" % str(onto)[:400])
         oid = onto.get("id") or onto.get("ontology", {}).get("id")
         s, _ = api("POST", "/projects/%s/ontology/approve" % pid,
                    {"ontology_id": oid})
@@ -319,6 +392,19 @@ if dry.get("blockers"):
     die("dry-run blockers must be resolved before approve: %s"
         % dry["blockers"])
 
+# Approval gate: print what execution will do, then require an explicit yes.
+dry_plan = dry.get("plan", {})
+print("Plan summary: %s nodes, %s relationships in %s batches "
+      "(mode: %s, destructive: %s)" % (
+          dry_plan.get("total_nodes"), dry_plan.get("total_relationships"),
+          dry_plan.get("total_batches"), dry_plan.get("write_mode"),
+          dry_plan.get("destructive")))
+print("Semantics: %s" % dry_plan.get("write_semantics"))
+for warning in dry_plan.get("warnings", []):
+    print("Plan warning: %s" % warning)
+if not confirm("Approve this migration (writes to Aura)?"):
+    die("not approved: re-run with --yes or answer 'yes' at the prompt")
+
 step("approving")
 s, _ = api("POST", "/projects/%s/migrations/%s/approve" % (pid, mid),
            {"approved": True})
@@ -338,6 +424,19 @@ s, ver = api("POST", "/projects/%s/migrations/%s/verify" % (pid, mid))
 if s != 200:
     die("verify failed: %s" % str(ver)[:500])
 print("Verify passed: %s" % ver.get("passed", ver))
+if not ver.get("passed", False):
+    for detail in ver.get("details", []):
+        print("Verify detail: %s" % detail)
+    die("verification reported passed=false; migration NOT trusted")
+
+step("fetching audit report")
+s, report = api("GET", "/projects/%s/migrations/%s/report" % (pid, mid))
+if s != 200:
+    die("report fetch failed: %s" % str(report)[:300])
+report_path = os.path.join(ROOT, "migration-%s-report.json" % mid)
+with open(report_path, "w") as fh:
+    json.dump(report, fh, indent=2)
+print("Report written: %s" % report_path)
 
 print("DONE: project %s migrated to Aura (migration %s)" % (pid, mid))
 PYEOF

@@ -2,7 +2,7 @@ use relating_migrate::{
     bolt_to_json, chunk_message, decode_message, encode_message, json_to_bolt, BoltValue,
 };
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -17,6 +17,14 @@ use tokio::sync::Mutex;
 pub struct FakeState {
     pub nodes: HashMap<String, HashMap<String, serde_json::Value>>,
     pub rel_counts: HashMap<String, u64>,
+    pub rel_uids: HashMap<String, HashSet<String>>,
+    /// Migration tags for rollback tests: (label, uid) / (type, uid) -> mid.
+    pub node_tags: HashMap<(String, String), String>,
+    pub rel_tags: HashMap<(String, String), String>,
+    /// Fault injection: fail the Nth UNWIND write (0-based) once, then
+    /// behave. Set to None to disable.
+    pub fail_write_at: Option<u64>,
+    pub write_seq: u64,
     pub port: u16,
     pub route_calls: u64,
 }
@@ -99,6 +107,38 @@ async fn send_success(stream: &mut TcpStream, stats: Vec<(&str, i64)>) -> bool {
         .collect();
     map.insert("stats".to_string(), BoltValue::Map(stats_map));
     send_message(stream, 0x70, &[BoltValue::Map(map)]).await
+}
+
+fn fake_rel_type(query: &str) -> Option<String> {
+    let bracket = query.find("-[")?;
+    let after = &query[bracket + 2..];
+    let colon = after.find(':')?;
+    let mut rest = after[colon + 1..].trim_start();
+    if let Some(stripped) = rest.strip_prefix('`') {
+        let end = stripped.find('`')?;
+        return Some(stripped[..end].to_string());
+    }
+    rest = rest.trim_start();
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
+    }
+    Some(rest[..end].to_string())
+}
+
+async fn send_failure(stream: &mut TcpStream, message: &str) -> bool {
+    let mut meta = BTreeMap::new();
+    meta.insert(
+        "code".to_string(),
+        BoltValue::String("Neo.TransientError.General.DatabaseUnavailable".to_string()),
+    );
+    meta.insert(
+        "message".to_string(),
+        BoltValue::String(message.to_string()),
+    );
+    send_message(stream, 0x7F, &[BoltValue::Map(meta)]).await
 }
 
 async fn send_success_with_fields(
@@ -187,45 +227,198 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
                     if !send_success(&mut stream, vec![]).await {
                         break;
                     }
-                } else if query.contains("UNWIND") && query.contains("MERGE (n:") {
-                    let label = fake_label(&query).unwrap_or_default();
-                    let mut created = 0i64;
-                    if let Some(BoltValue::List(rows)) = params.get("batch") {
+                } else if query.contains("UNWIND")
+                    && (query.contains("MERGE (n:") || query.contains("MERGE (s)-["))
+                {
+                    // Fault injection: fail one numbered write, then behave.
+                    let injected = {
                         let mut guard = state.lock().await;
-                        let table = guard.nodes.entry(label).or_default();
-                        for row in rows {
-                            if let BoltValue::Map(map) = row {
-                                if let Some(BoltValue::String(uid)) = map.get("uid") {
-                                    if !table.contains_key(uid) {
-                                        created += 1;
+                        let seq = guard.write_seq;
+                        guard.write_seq += 1;
+                        guard.fail_write_at == Some(seq)
+                    };
+                    if injected {
+                        if !send_failure(&mut stream, "injected mid-batch failure for tests").await
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    let mid = params
+                        .get("mid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    if query.contains("MERGE (n:") {
+                        let label = fake_label(&query).unwrap_or_default();
+                        let mut created = 0i64;
+                        if let Some(BoltValue::List(rows)) = params.get("batch") {
+                            let mut guard = state.lock().await;
+                            let mut fresh = Vec::new();
+                            {
+                                let table = guard.nodes.entry(label.clone()).or_default();
+                                for row in rows {
+                                    if let BoltValue::Map(map) = row {
+                                        if let Some(BoltValue::String(uid)) = map.get("uid") {
+                                            if !table.contains_key(uid) {
+                                                created += 1;
+                                                fresh.push(uid.clone());
+                                            }
+                                            let props = map
+                                                .get("props")
+                                                .map(bolt_to_json)
+                                                .unwrap_or(Value::Null);
+                                            table.insert(uid.clone(), props);
+                                        }
                                     }
-                                    let props =
-                                        map.get("props").map(bolt_to_json).unwrap_or(Value::Null);
-                                    table.insert(uid.clone(), props);
+                                }
+                            }
+                            // ON CREATE tagging: only fresh nodes are stamped.
+                            if let Some(mid) = mid {
+                                for uid in fresh {
+                                    guard.node_tags.insert((label.clone(), uid), mid.clone());
                                 }
                             }
                         }
+                        if !send_success(&mut stream, vec![("nodes-created", created)]).await {
+                            break;
+                        }
+                    } else {
+                        let rel_type = fake_rel_type(&query)
+                            .or_else(|| fake_label(&query))
+                            .unwrap_or_default();
+                        let mut created = 0i64;
+                        if let Some(BoltValue::List(rows)) = params.get("batch") {
+                            let mut guard = state.lock().await;
+                            let mut fresh = Vec::new();
+                            {
+                                let set = guard.rel_uids.entry(rel_type.clone()).or_default();
+                                for row in rows {
+                                    if let BoltValue::Map(map) = row {
+                                        match map.get("uid").and_then(|v| v.as_str()) {
+                                            Some(uid) => {
+                                                if set.insert(uid.to_string()) {
+                                                    created += 1;
+                                                    fresh.push(uid.to_string());
+                                                }
+                                            }
+                                            None => created += 1,
+                                        }
+                                    }
+                                }
+                            }
+                            let rel_len = guard
+                                .rel_uids
+                                .get(&rel_type)
+                                .map(|s| s.len() as u64)
+                                .unwrap_or(0);
+                            guard.rel_counts.insert(rel_type.clone(), rel_len);
+                            if let Some(mid) = mid {
+                                for uid in fresh {
+                                    guard.rel_tags.insert((rel_type.clone(), uid), mid.clone());
+                                }
+                            }
+                        }
+                        if !send_success(&mut stream, vec![("relationships-created", created)])
+                            .await
+                        {
+                            break;
+                        }
                     }
-                    if !send_success(&mut stream, vec![("nodes-created", created)]).await {
-                        break;
+                } else if query.contains("DELETE") {
+                    // Rollback deletes: remove records carrying the tag.
+                    let mid = params
+                        .get("mid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if query.contains("DETACH DELETE") {
+                        let mut guard = state.lock().await;
+                        let tagged: Vec<(String, String)> = guard
+                            .node_tags
+                            .iter()
+                            .filter(|(_, tag)| **tag == mid)
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        let deleted = tagged.len() as i64;
+                        for (label, uid) in tagged {
+                            guard.node_tags.remove(&(label.clone(), uid.clone()));
+                            if let Some(table) = guard.nodes.get_mut(&label) {
+                                table.remove(&uid);
+                            }
+                        }
+                        drop(guard);
+                        if !send_success(&mut stream, vec![("nodes-deleted", deleted)]).await {
+                            break;
+                        }
+                    } else {
+                        let mut guard = state.lock().await;
+                        let tagged: Vec<(String, String)> = guard
+                            .rel_tags
+                            .iter()
+                            .filter(|(_, tag)| **tag == mid)
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        let deleted = tagged.len() as i64;
+                        for (rel_type, uid) in &tagged {
+                            guard.rel_tags.remove(&(rel_type.clone(), uid.clone()));
+                            if let Some(set) = guard.rel_uids.get_mut(rel_type) {
+                                set.remove(uid);
+                            }
+                        }
+                        let affected: HashSet<String> =
+                            tagged.into_iter().map(|(t, _)| t).collect();
+                        for rel_type in affected {
+                            let len = guard
+                                .rel_uids
+                                .get(&rel_type)
+                                .map(|s| s.len() as u64)
+                                .unwrap_or(0);
+                            guard.rel_counts.insert(rel_type, len);
+                        }
+                        drop(guard);
+                        if !send_success(&mut stream, vec![("relationships-deleted", deleted)])
+                            .await
+                        {
+                            break;
+                        }
                     }
-                } else if query.contains("UNWIND") && query.contains("MERGE (s)-[") {
-                    let rel_type = fake_label(&query).unwrap_or_default();
-                    let count = match params.get("batch") {
-                        Some(BoltValue::List(rows)) => rows.len() as i64,
-                        _ => 0,
-                    };
-                    let mut guard = state.lock().await;
-                    *guard.rel_counts.entry(rel_type).or_insert(0) += count as u64;
-                    if !send_success(&mut stream, vec![("relationships-created", count)]).await {
+                } else if query.contains("RETURN n.uid") {
+                    let label = fake_label(&query).unwrap_or_default();
+                    let guard = state.lock().await;
+                    let mut uids: Vec<String> = guard
+                        .nodes
+                        .get(&label)
+                        .map(|t| t.keys().cloned().collect())
+                        .unwrap_or_default();
+                    drop(guard);
+                    uids.sort();
+                    for uid in uids {
+                        if !send_message(
+                            &mut stream,
+                            0x71,
+                            &[BoltValue::List(vec![BoltValue::String(uid)])],
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                    if !send_success(&mut stream, vec![]).await {
                         break;
                     }
                 } else if query.contains("count(") {
-                    let label = fake_label(&query).unwrap_or_default();
                     let guard = state.lock().await;
                     let count = if query.contains("-[") {
-                        guard.rel_counts.get(&label).copied().unwrap_or(0)
+                        let rel_type = fake_rel_type(&query)
+                            .or_else(|| fake_label(&query))
+                            .unwrap_or_default();
+                        guard
+                            .rel_uids
+                            .get(&rel_type)
+                            .map(|s| s.len() as u64)
+                            .unwrap_or(0)
                     } else {
+                        let label = fake_label(&query).unwrap_or_default();
                         guard.nodes.get(&label).map(|t| t.len() as u64).unwrap_or(0)
                     };
                     drop(guard);

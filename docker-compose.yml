@@ -1,7 +1,10 @@
 # Relating — full stack.
 #
-#   docker compose up --build            # server + postgres + ollama (+ db-init job)
-#   docker compose --profile neo4j up    # ... plus a local Neo4j for migration testing
+#   docker compose up --build                         # server alone (SQLite; enough to migrate)
+#   docker compose --profile postgres up --build      # ... plus team Postgres (+ db-init job)
+#   docker compose --profile ollama up --build        # ... plus local Ollama models
+#   docker compose --profile neo4j up                 # ... plus a local Neo4j for migration testing
+#   docker compose --profile postgres --profile ollama --profile neo4j up   # everything
 #
 # Workbench:  http://127.0.0.1:${RELATING_PORT:-8080}
 # API health:  http://127.0.0.1:${RELATING_PORT:-8080}/api/v1/health
@@ -11,6 +14,7 @@
 # Every service builds from its own folder under docker/ (one folder +
 # Dockerfile each). Tunables live in .env (see .env.example); all of them
 # have working defaults here so a bare `docker compose up` just works.
+# All published ports bind to 127.0.0.1 only: nothing listens on the LAN.
 # See docs/docker.md for the full runbook.
 
 services:
@@ -21,7 +25,7 @@ services:
     image: relating-server:latest
     container_name: relating-server
     ports:
-      - "${RELATING_PORT:-8080}:8080"
+      - "127.0.0.1:${RELATING_PORT:-8080}:8080"
     env_file:
       - path: .env
         required: false
@@ -35,22 +39,30 @@ services:
       RELATING_DATABASE_URL: sqlite:///app/data/relating_metadata.db
       RELATING_LOG_LEVEL: ${RELATING_LOG_LEVEL:-info}
       RELATING_MCP_TOKEN: ${RELATING_MCP_TOKEN:-}
+      # Optional API bearer token: when set, every /api/v1 route except
+      # /health requires `Authorization: Bearer <token>`. Recommended on
+      # any shared host.
+      RELATING_API_TOKEN: ${RELATING_API_TOKEN:-}
       # Pinned: containers have no OS keychain, so `keyring` from a laptop
       # .env would break secret resolution here. `auto` reads $AURA_PASSWORD
       # (above) and *_FILE sidecars instead.
       RELATING_SECRET_BACKEND: auto
       AURA_PASSWORD: ${AURA_PASSWORD:-}
+      # Prefer a mounted secret file on staging (keeps the password out of
+      # `docker inspect`): create `.secrets/aura_password`, uncomment the
+      # `secrets:` block on this service plus the top-level `secrets:`
+      # below, and set AURA_PASSWORD_FILE=/run/secrets/aura_password.
+      AURA_PASSWORD_FILE: ${AURA_PASSWORD_FILE:-}
       # Container-correct Ollama address (localhost here would be this
-      # container, not the ollama service). Used for Meta chat fallback and
-      # for embeddings, which the Meta API does not provide.
+      # container, not the ollama service). Only resolves when the ollama
+      # profile is up; otherwise Meta chat fallback/embeddings report a
+      # clear connection error. Used for Meta chat fallback and for
+      # embeddings, which the Meta API does not provide.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+    # secrets:
+    #   - aura_password
     volumes:
       - relating-data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 15s
@@ -63,19 +75,29 @@ services:
 
   # One-shot provisioning job (same image as server): runs the sanctioned
   # `relating db init-postgres` + `db check-postgres` against the postgres
-  # service. Idempotent — safe on every `docker compose up`.
+  # service. Idempotent — safe on every `docker compose up`. Opt-in via the
+  # postgres profile; the entrypoint percent-encodes the password when it
+  # builds the connection URL, so any characters are safe in POSTGRES_PASSWORD.
   db-init:
     build:
       context: .
       dockerfile: docker/server/Dockerfile
     image: relating-server:latest
     container_name: relating-db-init
+    profiles: ["postgres"]
     command: ["db-init"]
     env_file:
       - path: .env
         required: false
     environment:
-      RELATING_POSTGRES_URL: postgres://${POSTGRES_USER:-relating}:${POSTGRES_PASSWORD:-relating}@postgres:5432/${POSTGRES_DB:-relating}
+      PGHOST: postgres
+      PGPORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-relating}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-relating}
+      POSTGRES_DB: ${POSTGRES_DB:-relating}
+      # Explicit URL override (already-encoded): when set, the entrypoint
+      # uses it verbatim instead of building one from the parts above.
+      RELATING_POSTGRES_URL: ${RELATING_POSTGRES_URL:-}
       DB_INIT_ATTEMPTS: ${DB_INIT_ATTEMPTS:-30}
     depends_on:
       postgres:
@@ -90,8 +112,9 @@ services:
       dockerfile: Dockerfile
     image: relating-postgres:latest
     container_name: relating-postgres
+    profiles: ["postgres"]
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     env_file:
       - path: .env
         required: false
@@ -118,8 +141,9 @@ services:
       dockerfile: Dockerfile
     image: relating-ollama:latest
     container_name: relating-ollama
+    profiles: ["ollama"]
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
     env_file:
       - path: .env
         required: false
@@ -159,8 +183,8 @@ services:
     container_name: relating-neo4j
     profiles: ["neo4j"]
     ports:
-      - "${NEO4J_HTTP_PORT:-7474}:7474"
-      - "${NEO4J_BOLT_PORT:-7687}:7687"
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
     # NB: deliberately NO env_file here. The Neo4j entrypoint parses every
     # NEO4J_* variable as a server setting, so importing .env wholesale
     # (NEO4J_DATABASE, NEO4J_PASSWORD, NEO4J_*_PORT, ...) breaks startup with
@@ -189,6 +213,14 @@ services:
 networks:
   relating-net:
     driver: bridge
+
+# Staging secret mount (see the `secrets:` hint on the server service):
+#   mkdir -p .secrets && chmod 700 .secrets
+#   printf '%s' "$AURA_PASSWORD" > .secrets/aura_password
+# then uncomment the blocks and set AURA_PASSWORD_FILE=/run/secrets/aura_password.
+# secrets:
+#   aura_password:
+#     file: ./.secrets/aura_password
 
 volumes:
   relating-data:

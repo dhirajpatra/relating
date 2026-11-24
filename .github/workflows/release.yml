@@ -1,0 +1,57 @@
+# Release: tag `v*` builds portable release binaries and attaches them to
+# the GitHub release. A fresh Rust + Node compile takes many minutes, so
+# prebuilt artifacts are the fastest path to a first try.
+#
+# Today this ships linux-x86_64. macOS/Windows runners and multi-arch
+# container images (linux/arm64) are the next step once the linux flow is
+# green; the GHCR `latest` image already publishes on every main push from
+# the graph-validation workflow's docker-build job.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build workbench UI
+        run: |
+          cd web
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Build release binaries
+        run: cargo build --locked --release -p relating-server -p relating-cli
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/relating-server dist/
+          cp target/release/relating dist/
+          cp -r web/dist dist/web-dist
+          cp README.md DEMO_GUIDE.md .env.example dist/
+          tar -czf relating-${{ github.ref_name }}-linux-x86_64.tar.gz -C dist .
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: relating-${{ github.ref_name }}-linux-x86_64.tar.gz
+          generate_release_notes: true

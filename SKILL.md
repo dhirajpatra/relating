@@ -101,11 +101,11 @@ Initial read-only tools:
 - `analyze_aura_compatibility`
 - `preview_migration`
 
-Write tools are separate and disabled unless explicitly authorized:
-- `ingest_source`
-- `write_cypher`
-- `create_ontology_revision`
-- `execute_approved_migration`
+Write tools are not implemented yet — the server is read-only over MCP
+today. When they land (`ingest_source`, `write_cypher`,
+`create_ontology_revision`, `execute_approved_migration`), they must be
+separate and disabled unless explicitly authorized. Never present them as
+working until they are implemented, tested, and documented.
 
 MCP security:
 - Bind each connection to an authenticated identity and authorized project scope.
@@ -173,10 +173,22 @@ Implement migration as a controlled workflow:
 7. Dry run without remote writes.
 8. Require explicit user approval.
 9. Execute idempotent, bounded, resumable batches.
-10. Verify node/relationship/property counts and required schema objects.
+10. Verify counts, content hashes, relationship degrees, properties, and required schema objects.
 11. Generate a migration manifest and audit report.
+12. Support rollback of exactly the records a migration created.
 
-Use stable business keys for MERGE where available. Detect duplicate or missing keys. Never assume push deletes target data. Never promise real-time sync unless change capture, conflict resolution, and reconciliation are implemented. Keep destructive operations out of the default path.
+Use stable business keys for MERGE where available. Nodes MERGE on `uid`;
+relationships carry their own stable `uid` so parallel edges between the
+same endpoints never collapse into one. Detect duplicate or missing keys:
+nodes without `uid` are skipped with a warning, and a source with no `uid`
+at all blocks. Stamp created records with the migration id (`ON CREATE`
+only, so pre-existing matched records stay untagged) and delete by that
+tag on rollback; never present rollback as reverting property updates on
+pre-existing records. Scripts print the plan summary and require an
+interactive yes or `--yes` — approval is never automatic. Never assume
+push deletes target data. Never promise real-time sync unless change
+capture, conflict resolution, and reconciliation are implemented. Keep
+destructive operations out of the default path.
 
 ## 8. Security and privacy
 
@@ -185,6 +197,7 @@ Use stable business keys for MERGE where available. Detect duplicate or missing 
 - Never put secrets in source code, `.env` committed to Git, browser local storage, logs, prompts, or MCP responses.
 - Include `.env.example` with placeholders only.
 - Apply project-level authorization on every API and MCP operation.
+- Gate `/api/v1` with the `RELATING_API_TOKEN` bearer token on any shared host; bind published container ports to 127.0.0.1.
 - Use TLS for remote connections.
 - Add request validation, upload limits, query timeouts, row/result caps, and rate limits.
 - Audit access, ingestion, model calls, graph writes, and migrations.
@@ -282,11 +295,15 @@ Use versioned routes and typed request/response schemas. Suggested routes:
 - `POST /api/v1/projects/{id}/questions`
 - `POST /api/v1/projects/{id}/evaluations`
 - `POST /api/v1/projects/{id}/connections/aura`
+- `POST /api/v1/projects/{id}/ontology/import` (fixed-schema proposals; still need approval)
 - `POST /api/v1/projects/{id}/migrations/analyze`
 - `POST /api/v1/projects/{id}/migrations/plan`
 - `POST /api/v1/migrations/{id}/dry-run`
 - `POST /api/v1/migrations/{id}/execute` (approval required)
+- `POST /api/v1/migrations/{id}/verify`
+- `POST /api/v1/migrations/{id}/rollback` (completed/verified/failed only)
 - `GET /api/v1/migrations/{id}/report`
+- `POST /api/v1/projects/{id}/portability/scan?format=sarif`
 
 Long-running work returns a job ID and exposes progress through polling or SSE. Do not hold an HTTP request open for an entire ingestion or migration.
 
@@ -311,8 +328,12 @@ At minimum, automate:
 - Aura analysis produces compatibility findings.
 - Dry run performs no remote mutation.
 - Approved migration is idempotent and resumable.
-- Verification detects missing nodes/relationships/properties.
+- Parallel edges between the same nodes stay distinct.
+- Rollback removes exactly the records a migration created.
+- Verification detects missing nodes/relationships/properties, and content hashes catch membership drift behind equal counts.
+- A failed verification fails the migration tool; reports are written to disk.
 - Interrupted jobs can recover safely.
+- CLI tests run hermetically and never read the developer's real `.env`.
 - Secrets never appear in logs or tool output.
 
 ## 13. Required project documentation
@@ -320,6 +341,7 @@ At minimum, automate:
 Maintain:
 - `README.md`: product, quick start, architecture, configuration, features, deployment, security, roadmap.
 - `SKILL.md`: this implementation contract.
+- `AGENTS.md`: contributor and coding-agent conventions (commands, layout, gotchas).
 - `.env.example`: names and safe placeholders only.
 - `docs/architecture/`: diagrams and ADRs.
 - `docs/api/`: OpenAPI and MCP tool contracts.

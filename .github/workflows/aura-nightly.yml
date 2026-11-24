@@ -1,0 +1,70 @@
+# Nightly check against a real Aura Free instance.
+#
+# Setup (one-time, in the repo settings):
+#   1. Create an environment named `aura-nightly`. For team deploys, add
+#      required reviewers there: that is the human approval gate, mirroring
+#      the API's explicit-approval rule for migrations.
+#   2. On that environment, set secrets AURA_URI + AURA_PASSWORD (a throwaway
+#      Aura Free instance — the job only runs read-only analysis and a
+#      dry-run plan, never execute), and variable AURA_CONNECTION_ID when a
+#      stored connection should be used instead of the env-derived one.
+#
+# The job publishes a version-pinned Cypher compatibility matrix
+# (target agent string + findings) as a build artifact.
+name: Aura Nightly Check
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  aura-check:
+    runs-on: ubuntu-latest
+    environment: aura-nightly
+    env:
+      AURA_URI: ${{ secrets.AURA_URI }}
+      AURA_PASSWORD: ${{ secrets.AURA_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build relating CLI
+        run: cargo build --locked --release -p relating-cli
+
+      - name: Seed a demo project
+        id: project
+        run: |
+          PID=$(./target/release/relating demo seed --format json | jq -r .project_id)
+          if [ -z "$PID" ] || [ "$PID" = "null" ]; then
+            echo "Failed to seed a demo project." >&2
+            exit 1
+          fi
+          echo "pid=$PID" >> "$GITHUB_OUTPUT"
+
+      - name: Analyze against Aura
+        run: |
+          if [ -z "$AURA_URI" ] || [ -z "$AURA_PASSWORD" ]; then
+            echo "AURA_URI/AURA_PASSWORD not configured on the aura-nightly environment; skipping." >&2
+            exit 0
+          fi
+          CONN_ARGS=()
+          if [ -n "${{ vars.AURA_CONNECTION_ID }}" ]; then
+            CONN_ARGS=(--connection "${{ vars.AURA_CONNECTION_ID }}")
+          fi
+          ./target/release/relating aura analyze \
+            --project "${{ steps.project.outputs.pid }}" \
+            "${CONN_ARGS[@]}" --format json | tee aura-compat-matrix.json
+
+      - name: Upload compatibility matrix
+        if: hashFiles('aura-compat-matrix.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-compat-matrix
+          path: aura-compat-matrix.json
+          retention-days: 30

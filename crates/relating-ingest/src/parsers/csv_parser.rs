@@ -25,9 +25,8 @@ pub fn parse_csv_content(
         .collect::<Vec<String>>();
 
     let mut records = Vec::new();
-    let mut row_idx = 1;
 
-    for result in reader.records() {
+    for (row_idx, result) in (1..).zip(reader.records()) {
         let record = result.map_err(|e| IngestError::ParseError {
             filename: filename.to_string(),
             message: format!("Failed to parse CSV row {}: {}", row_idx, e),
@@ -46,8 +45,6 @@ pub fn parse_csv_content(
             lineage_ref: format!("row_{}", row_idx),
             fields,
         });
-
-        row_idx += 1;
     }
 
     let sample_records = records
@@ -100,7 +97,10 @@ mod tests {
 
         assert_eq!(records.len(), 2);
         assert_eq!(profile.total_records, 2);
-        assert_eq!(profile.field_names, vec!["name", "age", "active", "balance"]);
+        assert_eq!(
+            profile.field_names,
+            vec!["name", "age", "active", "balance"]
+        );
 
         assert_eq!(records[0].fields["name"], "Alice");
         assert_eq!(records[0].fields["age"], 30);

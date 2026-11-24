@@ -41,6 +41,12 @@ pub enum CliError {
     #[error("Advisor error: {0}")]
     Advisor(#[from] relating_advisor::AdvisorError),
 
+    #[error("Portability error: {0}")]
+    Port(#[from] relating_portability::PortError),
+
+    #[error("HTTP error: {0}")]
+    Http(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

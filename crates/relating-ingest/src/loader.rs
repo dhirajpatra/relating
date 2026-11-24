@@ -20,14 +20,18 @@ pub fn load_extracted_to_graph(
 
     // 1. Insert/Merge nodes
     for node in nodes {
-        let label = node.labels.first().cloned().unwrap_or_else(|| "Entity".to_string());
-        let cypher = format!(
-            "MERGE (n:{} {{uid: $uid}}) SET n += $props",
-            label
-        );
+        let label = node
+            .labels
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Entity".to_string());
+        let cypher = format!("MERGE (n:{} {{uid: $uid}}) SET n += $props", label);
 
         let mut params = HashMap::new();
-        params.insert("uid".to_string(), serde_json::Value::String(node.id.clone()));
+        params.insert(
+            "uid".to_string(),
+            serde_json::Value::String(node.id.clone()),
+        );
         params.insert(
             "props".to_string(),
             serde_json::Value::Object(

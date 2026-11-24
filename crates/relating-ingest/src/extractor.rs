@@ -21,9 +21,7 @@ pub fn extract_entities_and_relationships(
         .entities
         .iter()
         .find(|e| {
-            filename
-                .to_lowercase()
-                .contains(&e.label.to_lowercase())
+            filename.to_lowercase().contains(&e.label.to_lowercase())
                 || filename
                     .to_lowercase()
                     .contains(&e.display_name.to_lowercase())
@@ -45,9 +43,12 @@ pub fn extract_entities_and_relationships(
         .find(|p| p.is_primary_key)
         .map(|p| p.name.as_str())
         .or_else(|| {
-            records
-                .first()
-                .and_then(|r| r.fields.keys().find(|k| k.eq_ignore_ascii_case("id")).map(|s| s.as_str()))
+            records.first().and_then(|r| {
+                r.fields
+                    .keys()
+                    .find(|k| k.eq_ignore_ascii_case("id"))
+                    .map(|s| s.as_str())
+            })
         });
 
     for record in records {

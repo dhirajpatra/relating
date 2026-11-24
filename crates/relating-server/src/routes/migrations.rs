@@ -14,10 +14,12 @@ use relating_metadata::{
     list_migrations as db_list_migrations, update_migration,
 };
 use relating_migrate::{
-    analyze_project_with_options, dry_run, json_to_bolt, migrate_node_batch,
-    migrate_relationship_batch, preview_migration, vector_blockers_for_project, verify_migration,
-    AnalysisOptions, BoltValue, CompatFinding, DryRunReport, MigrationPlan, Neo4jBackend,
-    SampleExpectation, SourceCounts, VerificationReport, DEFAULT_BATCH_SIZE,
+    analyze_project_with_options, dry_run, json_to_bolt, migrate_node_batch_with_options,
+    migrate_relationship_batch_with_options, preview_migration_with_options, rollback_migration,
+    source_blockers_for_dry_run, uid_list_hash, vector_blockers_for_project, verify_migration,
+    AnalysisOptions, BoltValue, CompatFinding, DegreeExpectation, DryRunReport, MigrationPlan,
+    Neo4jBackend, RollbackOutcome, SampleExpectation, SourceCounts, VerificationReport,
+    DEFAULT_BATCH_SIZE, MAX_HASH_UIDS_PER_LABEL, MIGRATION_TAG_PROPERTY,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -45,6 +47,11 @@ pub struct PlanRequest {
     pub connection_id: String,
     #[serde(default)]
     pub batch_size: Option<usize>,
+    /// Optional target Aura tier for capacity pre-flight (`free`,
+    /// `professional-4gb`, `<N>gb`, `<N>mb`, `custom:<mb>`). Stored on the
+    /// plan so later dry-runs re-check the same spec.
+    #[serde(default)]
+    pub aura_tier: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -143,13 +150,14 @@ pub async fn plan_migration_handler(
         .batch_size
         .unwrap_or(DEFAULT_BATCH_SIZE)
         .clamp(1, 5000);
-    let (plan, mut report) = preview_migration(
+    let (plan, mut report) = preview_migration_with_options(
         &state.pool,
         state.graph.as_ref(),
         &project_id,
         &graph_path,
         &conn,
         batch_size,
+        payload.aura_tier,
     )
     .await?;
     // Deterministic vector blockers (embedding dims Aura cannot index) gate
@@ -217,10 +225,18 @@ pub async fn dry_run_handler(
         Ok(backend) => backend.test_connection().await,
         Err(e) => Err(relating_migrate::MigrateError::Connection(e.to_string())),
     };
-    let mut report = dry_run(plan, &target_check);
+    let mut report = dry_run(plan.clone(), &target_check);
     report
         .blockers
         .extend(vector_blockers_for_project(&state.pool, &migration.project_id).await?);
+    // Re-check every deterministic source blocker (property shapes, merge
+    // keys, tier capacity) so a re-drive after data changes stays honest.
+    let graph_path = state.project_graph_path(&migration.project_id);
+    report.blockers.extend(source_blockers_for_dry_run(
+        state.graph.as_ref(),
+        &graph_path,
+        &plan,
+    ));
 
     // A dry run performs zero remote writes by construction.
     migration.report = serde_json::json!({ "dry_run": report });
@@ -307,7 +323,11 @@ fn node_rows_from_page(
         };
         let mut bolt_props = BTreeMap::new();
         for (k, v) in props {
-            bolt_props.insert(k.clone(), json_to_bolt(v));
+            // The migration tag is stamped by ON CREATE, never copied from
+            // user data: a same-named user property must not forge it.
+            if k != MIGRATION_TAG_PROPERTY {
+                bolt_props.insert(k.clone(), json_to_bolt(v));
+            }
         }
         let mut bolt_row = BTreeMap::new();
         bolt_row.insert("uid".to_string(), BoltValue::String(uid));
@@ -318,6 +338,7 @@ fn node_rows_from_page(
 }
 
 fn rel_rows_from_page(
+    rel_type: &str,
     rows: &[HashMap<String, serde_json::Value>],
 ) -> (Vec<BTreeMap<String, BoltValue>>, usize) {
     let mut out = Vec::new();
@@ -325,14 +346,32 @@ fn rel_rows_from_page(
     for row in rows {
         let suid = row.get("suid").and_then(|v| v.as_str());
         let tuid = row.get("tuid").and_then(|v| v.as_str());
-        let props = row.get("rel").and_then(|r| r.get("properties"));
+        let rel = row.get("rel");
+        let props = rel.and_then(|r| r.get("properties"));
         match (suid, tuid, props) {
             (Some(s), Some(t), Some(serde_json::Value::Object(map))) => {
+                // Stable per-edge key: the source record id when present
+                // (delta pushes update in place), else a content hash so
+                // parallel edges between the same endpoints stay distinct.
+                let source_id = rel
+                    .and_then(|r| r.get("id"))
+                    .map(|id| id.to_string())
+                    .filter(|id| !id.is_empty() && id != "null");
+                let uid = relating_migrate::relationship_uid(
+                    rel_type,
+                    s,
+                    t,
+                    source_id.as_deref(),
+                    &serde_json::Value::Object(map.clone()),
+                );
                 let mut bolt_props = BTreeMap::new();
                 for (k, v) in map {
-                    bolt_props.insert(k.clone(), json_to_bolt(v));
+                    if k != MIGRATION_TAG_PROPERTY {
+                        bolt_props.insert(k.clone(), json_to_bolt(v));
+                    }
                 }
                 let mut bolt_row = BTreeMap::new();
+                bolt_row.insert("uid".to_string(), BoltValue::String(uid));
                 bolt_row.insert("suid".to_string(), BoltValue::String(s.to_string()));
                 bolt_row.insert("tuid".to_string(), BoltValue::String(t.to_string()));
                 bolt_row.insert("props".to_string(), BoltValue::Map(bolt_props));
@@ -378,6 +417,9 @@ pub async fn execute_migration_handler(
     backend.test_connection().await?;
 
     let plan = parse_plan(&migration)?;
+    // Rollback tag: everything this execution creates is stamped with the
+    // migration id (ON CREATE only), so rollback can remove exactly it.
+    let mid_tag = mid.to_string();
     migration.status = MigrationStatus::Running;
     migration.progress.batches_total = plan.total_batches;
     update_migration(&state.pool, &migration).await?;
@@ -411,7 +453,8 @@ pub async fn execute_migration_handler(
                 .graph
                 .execute_read(&graph_path, &query, HashMap::new(), None)?;
             let (rows, skipped) = node_rows_from_page(&page.rows);
-            match migrate_node_batch(&backend, &batch.name, rows).await {
+            match migrate_node_batch_with_options(&backend, &batch.name, rows, Some(&mid_tag)).await
+            {
                 Ok(outcome) => {
                     migration.progress.nodes_migrated += outcome.nodes_created.max(0) as u64;
                     migration.progress.batches_done += 1;
@@ -450,8 +493,15 @@ pub async fn execute_migration_handler(
             let page = state
                 .graph
                 .execute_read(&graph_path, &query, HashMap::new(), None)?;
-            let (rows, _skipped) = rel_rows_from_page(&page.rows);
-            match migrate_relationship_batch(&backend, &batch.name, rows).await {
+            let (rows, _skipped) = rel_rows_from_page(&batch.name, &page.rows);
+            match migrate_relationship_batch_with_options(
+                &backend,
+                &batch.name,
+                rows,
+                Some(&mid_tag),
+            )
+            .await
+            {
                 Ok(outcome) => {
                     migration.progress.relationships_migrated +=
                         outcome.relationships_created.max(0) as u64;
@@ -515,9 +565,69 @@ pub async fn verify_migration_handler(
         .graph
         .get_rel_type_counts(&graph_path)
         .unwrap_or_default();
+
+    // Per-label content hashes over the sorted source uids. Labels over the
+    // hashing cap skip hashing explicitly (counts still verify).
+    let mut label_hashes = Vec::new();
+    let mut hash_skipped_labels = Vec::new();
+    for (label, count) in &label_counts {
+        if *count > MAX_HASH_UIDS_PER_LABEL {
+            hash_skipped_labels.push(label.clone());
+            continue;
+        }
+        let query = format!(
+            "MATCH (n:{}) RETURN n.uid AS uid",
+            escape_cypher_label(label)
+        );
+        let page = state
+            .graph
+            .execute_read(&graph_path, &query, HashMap::new(), None)?;
+        let uids: Vec<String> = page
+            .rows
+            .iter()
+            .filter_map(|row| row.get("uid").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        label_hashes.push((label.clone(), uid_list_hash(&uids)));
+    }
+
+    // Relationship-degree expectations: outgoing edge counts per
+    // (label, relationship type) pair. Schema-bounded; capped so a huge
+    // schema cannot turn verification into a query flood.
+    const MAX_DEGREE_PAIRS: usize = 500;
+    let mut degrees = Vec::new();
+    'pairs: for (label, _) in &label_counts {
+        for (rel_type, _) in &rel_counts {
+            if degrees.len() >= MAX_DEGREE_PAIRS {
+                break 'pairs;
+            }
+            let query = format!(
+                "MATCH (n:{})-[r:{}]->() RETURN count(r) AS c",
+                escape_cypher_label(label),
+                escape_cypher_label(rel_type)
+            );
+            let page = state
+                .graph
+                .execute_read(&graph_path, &query, HashMap::new(), None)?;
+            let out_count = page
+                .rows
+                .first()
+                .and_then(|row| row.values().next())
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            degrees.push(DegreeExpectation {
+                label: label.clone(),
+                rel_type: rel_type.clone(),
+                out_count,
+            });
+        }
+    }
+
     let source = SourceCounts {
         labels: label_counts,
         rel_types: rel_counts,
+        label_hashes,
+        hash_skipped_labels,
+        degrees,
     };
 
     // Sample up to 20 migrated nodes for property comparison.
@@ -566,6 +676,47 @@ pub async fn verify_migration_handler(
     )
     .map_err(|e| AppError::Internal(format!("Failed to read verification: {}", e)))?;
     Ok(Json(out))
+}
+
+pub async fn rollback_migration_handler(
+    State(state): State<AppState>,
+    Path((id_str, mid_str)): Path<(String, String)>,
+) -> Result<Json<RollbackOutcome>, AppError> {
+    let _project_id = parse_project(&id_str)?;
+    let mid = MigrationId::parse(&mid_str).map_err(|e| {
+        AppError::BadRequest(format!("Invalid Migration UUID '{}': {}", mid_str, e))
+    })?;
+
+    let mut migration = db_get_migration(&state.pool, &mid)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Migration '{}' not found", mid)))?;
+
+    match migration.status {
+        MigrationStatus::Completed | MigrationStatus::Verified | MigrationStatus::Failed => {}
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "Only completed, verified, or failed migrations can be rolled back (current status: {:?})",
+                other
+            )));
+        }
+    }
+
+    let conn = get_connection(&state.pool, &migration.project_id, &migration.connection_id)
+        .await
+        .map_err(|_| AppError::NotFound("Migration connection no longer exists".to_string()))?;
+    let backend = build_backend(&conn, None)?;
+    // Fail fast before any remote delete when credentials are wrong.
+    backend.test_connection().await?;
+
+    let outcome = rollback_migration(&backend, &mid.to_string()).await?;
+    migration.status = MigrationStatus::RolledBack;
+    migration.progress.message = Some(format!(
+        "Rolled back migration {}: deleted {} node(s) and {} relationship(s) it created. \
+         Property updates on pre-existing target records were not reverted.",
+        mid, outcome.nodes_deleted, outcome.relationships_deleted
+    ));
+    update_migration(&state.pool, &migration).await?;
+    Ok(Json(outcome))
 }
 
 pub async fn list_migrations_handler(

@@ -114,7 +114,9 @@ impl AiProvider for OpenAiCompatibleProvider {
             .headers(headers)
             .send()
             .await
-            .map_err(|e| AiError::ConnectionFailed(format!("Failed to reach {}: {}", test_url, e)))?;
+            .map_err(|e| {
+                AiError::ConnectionFailed(format!("Failed to reach {}: {}", test_url, e))
+            })?;
 
         let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
         let status = resp.status();
@@ -179,7 +181,12 @@ impl AiProvider for OpenAiCompatibleProvider {
 
         let (prompt_tokens, completion_tokens) = parsed
             .usage
-            .map(|u| (u.prompt_tokens.unwrap_or(0), u.completion_tokens.unwrap_or(0)))
+            .map(|u| {
+                (
+                    u.prompt_tokens.unwrap_or(0),
+                    u.completion_tokens.unwrap_or(0),
+                )
+            })
             .unwrap_or((0, 0));
 
         Ok(ChatResponse {
@@ -222,11 +229,7 @@ impl AiProvider for OpenAiCompatibleProvider {
             .await
             .map_err(|e| AiError::Serialization(format!("Failed to parse embeddings: {}", e)))?;
 
-        let dimensions = parsed
-            .data
-            .first()
-            .map(|d| d.embedding.len())
-            .unwrap_or(0);
+        let dimensions = parsed.data.first().map(|d| d.embedding.len()).unwrap_or(0);
 
         let embeddings = parsed.data.into_iter().map(|d| d.embedding).collect();
         let total_tokens = parsed.usage.and_then(|u| u.total_tokens).unwrap_or(0);

@@ -24,13 +24,28 @@ pub const VECTOR_RAM_REVIEW_FRACTION: f64 = 0.5;
 /// An Aura target tier, identified by RAM. RAM figures for named presets are
 /// documented estimates (Aura does not publish exact per-tier RAM for every
 /// offering); callers can always pass an explicit `custom:<mb>` spec.
+///
+/// Capacity caps (`max_*`) are likewise documented estimates for tiers with
+/// published hard limits (notably AuraDB Free); `None` means "no published
+/// cap — sized by memory, not by count". Teams must confirm against the
+/// current Neo4j documentation before migrating production data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuraTier {
     pub id: String,
     pub display_name: String,
     pub ram_mb: u64,
     pub note: String,
+    /// Published node cap, when the tier documents one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_nodes: Option<u64>,
+    /// Published relationship cap, when the tier documents one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_relationships: Option<u64>,
 }
+
+/// Above this fraction of a published cap, the fit is flagged for manual
+/// review even though the data still fits nominally.
+pub const CAPACITY_REVIEW_FRACTION: f64 = 0.8;
 
 impl AuraTier {
     pub fn ram_bytes(&self) -> u64 {
@@ -50,24 +65,33 @@ pub fn well_known_tiers() -> Vec<AuraTier> {
             ram_mb: 1024,
             note: "Estimate: Free tier resources are shared and limited; confirm vector support and caps in the Aura console before migrating embeddings."
                 .to_string(),
+            // Documented AuraDB Free estimates: hard caps on graph size.
+            max_nodes: Some(200_000),
+            max_relationships: Some(400_000),
         },
         AuraTier {
             id: "professional-2gb".to_string(),
             display_name: "AuraDB Professional 2 GB".to_string(),
             ram_mb: 2048,
             note: "Estimate: pick the preset matching the provisioned instance size.".to_string(),
+            max_nodes: None,
+            max_relationships: None,
         },
         AuraTier {
             id: "professional-4gb".to_string(),
             display_name: "AuraDB Professional 4 GB".to_string(),
             ram_mb: 4096,
             note: "Estimate: pick the preset matching the provisioned instance size.".to_string(),
+            max_nodes: None,
+            max_relationships: None,
         },
         AuraTier {
             id: "professional-8gb".to_string(),
             display_name: "AuraDB Professional 8 GB".to_string(),
             ram_mb: 8192,
             note: "Estimate: pick the preset matching the provisioned instance size.".to_string(),
+            max_nodes: None,
+            max_relationships: None,
         },
         AuraTier {
             id: "dedicated-16gb".to_string(),
@@ -75,6 +99,8 @@ pub fn well_known_tiers() -> Vec<AuraTier> {
             ram_mb: 16384,
             note: "Starting point for dedicated tiers; use custom:<mb> for the exact instance size."
                 .to_string(),
+            max_nodes: None,
+            max_relationships: None,
         },
     ]
 }
@@ -131,7 +157,98 @@ pub fn parse_tier(spec: &str) -> Result<AuraTier, MigrateError> {
         display_name: format!("Custom ({} MB RAM)", ram_mb),
         ram_mb,
         note: "Caller-supplied instance size.".to_string(),
+        max_nodes: None,
+        max_relationships: None,
     })
+}
+
+/// Pre-flight capacity check: source graph size against the tier's published
+/// node/relationship caps. Tiers without published caps report Supported
+/// (sized by memory, verified by the vector-fit and batch checks instead).
+pub fn check_capacity_fit(
+    node_count: u64,
+    relationship_count: u64,
+    tier: &AuraTier,
+) -> Vec<CompatFinding> {
+    let mut findings = Vec::new();
+    for (kind, count, cap) in [
+        ("nodes", node_count, tier.max_nodes),
+        ("relationships", relationship_count, tier.max_relationships),
+    ] {
+        let Some(cap) = cap else {
+            findings.push(CompatFinding {
+                category: "tier_capacity".to_string(),
+                subject: format!("{} on {}", kind, tier.display_name),
+                verdict: CapabilityVerdict::Supported,
+                detail: format!(
+                    "Source has {} {}; {} publishes no hard {} cap (sized by memory)",
+                    count, kind, tier.display_name, kind
+                ),
+                remediation: None,
+            });
+            continue;
+        };
+        let review_at = (cap as f64 * CAPACITY_REVIEW_FRACTION) as u64;
+        let (verdict, detail, remediation) = if count > cap {
+            (
+                CapabilityVerdict::Unsupported,
+                format!(
+                    "Source has {} {} but {} caps at ~{}: the migration would exceed the tier",
+                    count, kind, tier.display_name, cap
+                ),
+                Some("Use a larger Aura tier or migrate a subset of the graph".to_string()),
+            )
+        } else if count > review_at {
+            (
+                CapabilityVerdict::RequiresManualReview,
+                format!(
+                    "Source has {} {} against a ~{} cap on {}: fits, but leaves little headroom for growth",
+                    count, kind, cap, tier.display_name
+                ),
+                Some(
+                    "Confirm headroom in the Aura console; Delta pushes after this migration count toward the same cap"
+                        .to_string(),
+                ),
+            )
+        } else {
+            (
+                CapabilityVerdict::Supported,
+                format!(
+                    "Source has {} {} against a ~{} cap on {}",
+                    count, kind, cap, tier.display_name
+                ),
+                None,
+            )
+        };
+        findings.push(CompatFinding {
+            category: "tier_capacity".to_string(),
+            subject: format!("{} on {}", kind, tier.display_name),
+            verdict,
+            detail,
+            remediation,
+        });
+    }
+    findings
+}
+
+/// Deterministic blockers for the dry-run/approve gate: source sizes that
+/// exceed the tier's published caps fail on Aura no matter what.
+pub fn capacity_blockers(node_count: u64, relationship_count: u64, tier: &AuraTier) -> Vec<String> {
+    let mut blockers = Vec::new();
+    for (kind, count, cap) in [
+        ("nodes", node_count, tier.max_nodes),
+        ("relationships", relationship_count, tier.max_relationships),
+    ] {
+        if let Some(cap) = cap {
+            if count > cap {
+                blockers.push(format!(
+                    "Source has {} {} but {} caps at ~{}",
+                    count, kind, tier.display_name, cap
+                ));
+            }
+        }
+    }
+    blockers
 }
 
 /// One embedding profile's vector load destined for a Neo4j vector index.
@@ -402,5 +519,38 @@ mod tests {
     fn test_estimate_vector_bytes_saturates() {
         assert_eq!(estimate_vector_bytes(1000, 768), 1000 * 768 * 4);
         assert_eq!(estimate_vector_bytes(u64::MAX, usize::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn test_capacity_fit_bands_against_free_caps() {
+        let free = parse_tier("free").unwrap();
+        assert_eq!(free.max_nodes, Some(200_000));
+
+        let fits = check_capacity_fit(1_000, 2_000, &free);
+        assert!(fits
+            .iter()
+            .all(|f| f.verdict == CapabilityVerdict::Supported));
+
+        let review = check_capacity_fit(190_000, 10, &free);
+        assert!(review
+            .iter()
+            .any(|f| f.subject.contains("nodes")
+                && f.verdict == CapabilityVerdict::RequiresManualReview));
+
+        let over = check_capacity_fit(1_000, 500_000, &free);
+        assert!(over
+            .iter()
+            .any(|f| f.subject.contains("relationships")
+                && f.verdict == CapabilityVerdict::Unsupported));
+        assert_eq!(capacity_blockers(1_000, 500_000, &free).len(), 1);
+        assert!(capacity_blockers(1_000, 2_000, &free).is_empty());
+
+        // Uncapped tiers report Supported, never block.
+        let pro = parse_tier("professional-8gb").unwrap();
+        let fits = check_capacity_fit(10_000_000, 50_000_000, &pro);
+        assert!(fits
+            .iter()
+            .all(|f| f.verdict == CapabilityVerdict::Supported));
+        assert!(capacity_blockers(10_000_000, 50_000_000, &pro).is_empty());
     }
 }

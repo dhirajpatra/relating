@@ -66,6 +66,22 @@ run`, `advisor analyze --measure`). Connection records still store only the
 variable *name*. The Meta API key (`META_API_KEY`, alias `MODEL_API_KEY`)
 resolves through the same chain.
 
+## API bearer token (shared hosts)
+
+The JSON API has no login system; on a shared host, set a bearer token:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_hex(32))'  # put in .env:
+RELATING_API_TOKEN=<long-random-string>
+```
+
+When set, every `/api/v1` route except `/health` requires
+`Authorization: Bearer <token>` (401 otherwise). `migrate-aura.sh` and
+`relating aura migrate` send it automatically from the environment.
+Without it the API stays open, which is only appropriate on loopback —
+compose binds every published port to 127.0.0.1 for exactly this reason.
+The MCP HTTP transport keeps its own `RELATING_MCP_TOKEN` gate.
+
 ## Aura connection straight from `.env`
 
 When `AURA_URI` plus a resolvable `AURA_PASSWORD` are present, Relating

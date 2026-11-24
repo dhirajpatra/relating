@@ -25,7 +25,10 @@ pub async fn insert_project(pool: &SqlitePool, project: &Project) -> Result<(), 
     Ok(())
 }
 
-pub async fn get_project(pool: &SqlitePool, id: &ProjectId) -> Result<Option<Project>, RelatingError> {
+pub async fn get_project(
+    pool: &SqlitePool,
+    id: &ProjectId,
+) -> Result<Option<Project>, RelatingError> {
     let row = sqlx::query(
         r#"
         SELECT id, name, description, created_at, updated_at, ai_config
@@ -50,13 +53,19 @@ pub async fn get_project(pool: &SqlitePool, id: &ProjectId) -> Result<Option<Pro
             let id = ProjectId::parse(&id_str)
                 .map_err(|e| RelatingError::Internal(format!("Invalid UUID in DB: {}", e)))?;
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map_err(|e| RelatingError::Internal(format!("Invalid created_at timestamp: {}", e)))?
+                .map_err(|e| {
+                    RelatingError::Internal(format!("Invalid created_at timestamp: {}", e))
+                })?
                 .with_timezone(&Utc);
             let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
-                .map_err(|e| RelatingError::Internal(format!("Invalid updated_at timestamp: {}", e)))?
+                .map_err(|e| {
+                    RelatingError::Internal(format!("Invalid updated_at timestamp: {}", e))
+                })?
                 .with_timezone(&Utc);
-            let ai_config: AiProviderConfig = serde_json::from_str(&ai_config_json)
-                .map_err(|e| RelatingError::Internal(format!("Failed to deserialize AI config: {}", e)))?;
+            let ai_config: AiProviderConfig =
+                serde_json::from_str(&ai_config_json).map_err(|e| {
+                    RelatingError::Internal(format!("Failed to deserialize AI config: {}", e))
+                })?;
 
             Ok(Some(Project {
                 id,
@@ -100,8 +109,9 @@ pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>, RelatingEr
         let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
             .map_err(|e| RelatingError::Internal(format!("Invalid updated_at timestamp: {}", e)))?
             .with_timezone(&Utc);
-        let ai_config: AiProviderConfig = serde_json::from_str(&ai_config_json)
-            .map_err(|e| RelatingError::Internal(format!("Failed to deserialize AI config: {}", e)))?;
+        let ai_config: AiProviderConfig = serde_json::from_str(&ai_config_json).map_err(|e| {
+            RelatingError::Internal(format!("Failed to deserialize AI config: {}", e))
+        })?;
 
         projects.push(Project {
             id,
@@ -151,7 +161,10 @@ mod tests {
 
         insert_project(&pool, &project).await.unwrap();
 
-        let fetched = get_project(&pool, &project.id).await.unwrap().expect("Project should exist");
+        let fetched = get_project(&pool, &project.id)
+            .await
+            .unwrap()
+            .expect("Project should exist");
         assert_eq!(fetched.name, "Test Project");
         assert_eq!(fetched.description, "A test project description");
 

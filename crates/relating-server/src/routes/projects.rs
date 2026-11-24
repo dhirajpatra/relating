@@ -4,11 +4,11 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::Utc;
-use relating_core::{
-    AiProviderConfig, CreateProjectRequest, Project, ProjectId, ProjectSummary,
-};
+use relating_core::{AiProviderConfig, CreateProjectRequest, Project, ProjectId, ProjectSummary};
 use relating_graph::{GraphBackend, GraphSchemaInfo};
-use relating_metadata::{delete_project as db_delete, get_project as db_get, insert_project, list_projects as db_list};
+use relating_metadata::{
+    delete_project as db_delete, get_project as db_get, insert_project, list_projects as db_list,
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -23,7 +23,9 @@ pub async fn create_project_handler(
 ) -> Result<(StatusCode, Json<Project>), AppError> {
     let name = payload.name.trim();
     if name.is_empty() {
-        return Err(AppError::BadRequest("Project name cannot be empty".to_string()));
+        return Err(AppError::BadRequest(
+            "Project name cannot be empty".to_string(),
+        ));
     }
 
     let project_id = ProjectId::new();
@@ -100,7 +102,10 @@ pub async fn delete_project_handler(
 
     let deleted = db_delete(&state.pool, &id).await?;
     if !deleted {
-        return Err(AppError::NotFound(format!("Project with ID '{}' not found", id)));
+        return Err(AppError::NotFound(format!(
+            "Project with ID '{}' not found",
+            id
+        )));
     }
 
     // Clean up project files on disk

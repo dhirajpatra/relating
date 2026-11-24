@@ -272,19 +272,19 @@ mod tests {
     use crate::migration_repo::insert_migration;
     use crate::project_repo::insert_project;
     use relating_core::{AiProviderConfig, Migration, MigrationId, MigrationStatus, Project};
-    use std::sync::Mutex;
 
-    // Process env is global; serialize the tests that mutate AURA_*.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Process env is global; serialize the tests that mutate AURA_*. Async
+    // lock: these tests hold it across awaits (a std MutexGuard must not).
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     struct AuraEnvGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
+        _lock: tokio::sync::MutexGuard<'static, ()>,
         saved: Vec<(String, Option<String>)>,
     }
 
     impl AuraEnvGuard {
-        fn set(uri: &str) -> Self {
-            let lock = ENV_LOCK.lock().unwrap();
+        async fn set(uri: &str) -> Self {
+            let lock = ENV_LOCK.lock().await;
             let saved: Vec<(String, Option<String>)> = [
                 "AURA_URI",
                 "AURA_USERNAME",
@@ -407,7 +407,7 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_refreshes_env_managed_row_on_drift() {
         // Shares process env with the test below; serialized via ENV_LOCK.
-        let _serial = ENV_LOCK.lock().unwrap();
+        let _serial = ENV_LOCK.lock().await;
         let saved: Vec<(String, Option<String>)> = [
             "AURA_URI",
             "AURA_USERNAME",
@@ -460,7 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolving_env_does_not_leak_across_projects() {
-        let _env = AuraEnvGuard::set("neo4j+s://xscope.databases.neo4j.io");
+        let _env = AuraEnvGuard::set("neo4j+s://xscope.databases.neo4j.io").await;
 
         let pool = init_in_memory_db().await.unwrap();
         let project_a = seed_project(&pool).await;

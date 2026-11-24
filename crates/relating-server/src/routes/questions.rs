@@ -42,8 +42,14 @@ pub async fn ask_question_handler(
     }
 
     let stored = get_retrieval_config(&state.pool, &project_id).await?;
-    let strategy = payload.strategy.or_else(|| stored.as_ref().map(|c| c.default_strategy.clone())).unwrap_or_default();
-    let top_k = payload.top_k.or_else(|| stored.as_ref().map(|c| c.default_top_k)).unwrap_or(DEFAULT_TOP_K);
+    let strategy = payload
+        .strategy
+        .or_else(|| stored.as_ref().map(|c| c.default_strategy.clone()))
+        .unwrap_or_default();
+    let top_k = payload
+        .top_k
+        .or_else(|| stored.as_ref().map(|c| c.default_top_k))
+        .unwrap_or(DEFAULT_TOP_K);
     let provider = create_ai_provider(&project.ai_config)?;
     let start_time = std::time::Instant::now();
 

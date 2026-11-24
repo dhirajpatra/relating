@@ -35,3 +35,13 @@ behind `EXPLAIN` so validation never mutates the target. Assertions:
 `no_error`, `row_count_eq`, `row_count_gte`. Returns per-test
 `{passed, detail, row_count, elapsed_ms}` plus totals. Failures are reported
 per test; one bad query never aborts the run.
+
+## SARIF and CI gates
+
+`POST /projects/{id}/portability/scan?format=sarif` returns SARIF 2.1.0
+instead of the native report (non-portable findings only, with levels
+`note`/`warning`/`error` and remediation fixes). Upload it with
+`github/codeql-action/upload-sarif` so findings show up as PR annotations.
+Headlessly, `relating portability scan --dir DIR [--emit text|json|sarif]
+[--out FILE]` scans any checkout and exits 1 on breaking
+(`NEEDS_REWRITE`) findings.

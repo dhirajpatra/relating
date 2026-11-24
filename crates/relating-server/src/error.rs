@@ -102,7 +102,11 @@ impl IntoResponse for AppError {
             }
             AppError::Migrate(err) => (StatusCode::BAD_REQUEST, "MIGRATION_ERROR", err.to_string()),
             AppError::Schema(err) => (StatusCode::BAD_REQUEST, "SCHEMA_ERROR", err.to_string()),
-            AppError::Port(err) => (StatusCode::BAD_REQUEST, "PORTABILITY_ERROR", err.to_string()),
+            AppError::Port(err) => (
+                StatusCode::BAD_REQUEST,
+                "PORTABILITY_ERROR",
+                err.to_string(),
+            ),
             AppError::Shadow(err) => (StatusCode::BAD_REQUEST, "SHADOW_ERROR", err.to_string()),
             AppError::Debug(err) => (StatusCode::BAD_REQUEST, "DEBUG_ERROR", err.to_string()),
             AppError::Synth(err) => (StatusCode::BAD_REQUEST, "SYNTH_ERROR", err.to_string()),

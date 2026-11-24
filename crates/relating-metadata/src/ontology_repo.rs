@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
-use relating_core::{Ontology, OntologyId, OntologySchema, OntologyStatus, ProjectId, RelatingError};
+use relating_core::{
+    Ontology, OntologyId, OntologySchema, OntologyStatus, ProjectId, RelatingError,
+};
 use sqlx::{Row, SqlitePool};
 
 pub async fn insert_ontology(pool: &SqlitePool, ontology: &Ontology) -> Result<(), RelatingError> {
@@ -9,8 +11,9 @@ pub async fn insert_ontology(pool: &SqlitePool, ontology: &Ontology) -> Result<(
         OntologyStatus::Rejected => "rejected",
     };
 
-    let schema_json = serde_json::to_string(&ontology.schema)
-        .map_err(|e| RelatingError::Internal(format!("Failed to serialize ontology schema: {}", e)))?;
+    let schema_json = serde_json::to_string(&ontology.schema).map_err(|e| {
+        RelatingError::Internal(format!("Failed to serialize ontology schema: {}", e))
+    })?;
 
     sqlx::query(
         r#"
@@ -74,10 +77,7 @@ pub async fn get_approved_ontology(
     map_ontology_row(row)
 }
 
-pub async fn approve_ontology(
-    pool: &SqlitePool,
-    id: &OntologyId,
-) -> Result<bool, RelatingError> {
+pub async fn approve_ontology(pool: &SqlitePool, id: &OntologyId) -> Result<bool, RelatingError> {
     let now = Utc::now();
     let result = sqlx::query(
         r#"
@@ -95,7 +95,9 @@ pub async fn approve_ontology(
     Ok(result.rows_affected() > 0)
 }
 
-fn map_ontology_row(row: Option<sqlx::sqlite::SqliteRow>) -> Result<Option<Ontology>, RelatingError> {
+fn map_ontology_row(
+    row: Option<sqlx::sqlite::SqliteRow>,
+) -> Result<Option<Ontology>, RelatingError> {
     match row {
         Some(row) => {
             let id_str: String = row.get("id");
@@ -114,7 +116,9 @@ fn map_ontology_row(row: Option<sqlx::sqlite::SqliteRow>) -> Result<Option<Ontol
                 .map_err(|e| RelatingError::Internal(format!("Invalid timestamp: {}", e)))?
                 .with_timezone(&Utc);
             let approved_at = approved_at_str.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s).ok().map(|t| t.with_timezone(&Utc))
+                DateTime::parse_from_rfc3339(&s)
+                    .ok()
+                    .map(|t| t.with_timezone(&Utc))
             });
 
             let status = match status_str.as_str() {
@@ -123,8 +127,9 @@ fn map_ontology_row(row: Option<sqlx::sqlite::SqliteRow>) -> Result<Option<Ontol
                 _ => OntologyStatus::Proposed,
             };
 
-            let schema: OntologySchema = serde_json::from_str(&schema_json)
-                .map_err(|e| RelatingError::Internal(format!("Failed to deserialize ontology schema: {}", e)))?;
+            let schema: OntologySchema = serde_json::from_str(&schema_json).map_err(|e| {
+                RelatingError::Internal(format!("Failed to deserialize ontology schema: {}", e))
+            })?;
 
             Ok(Some(Ontology {
                 id,

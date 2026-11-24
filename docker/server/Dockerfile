@@ -9,7 +9,8 @@
 #                    compose job can provision the shared Postgres schema)
 
 # ---- Stage 1: Web frontend ----
-FROM node:22-alpine AS web-builder
+# Pinned (minor): bump together after verifying `npm ci && npm run build`.
+FROM node:22.12-alpine AS web-builder
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci --no-audit --no-fund
@@ -17,7 +18,8 @@ COPY web/ ./
 RUN npm run build
 
 # ---- Stage 2: Rust workspace (needs BuildKit: `docker compose` v2) ----
-FROM rust:1-bookworm AS rust-builder
+# Pinned (minor): bump after verifying `cargo build --locked`.
+FROM rust:1.90-bookworm AS rust-builder
 WORKDIR /app
 # Dependency manifests first so `cargo fetch` is cached until they change.
 COPY Cargo.toml Cargo.lock ./
@@ -44,12 +46,16 @@ FROM debian:bookworm-slim
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --home-dir /app --shell /usr/sbin/nologin relating \
+    && mkdir -p /app/data \
+    && chown -R relating:relating /app
 COPY --from=rust-builder /app/bin/relating-server /usr/local/bin/relating-server
 COPY --from=rust-builder /app/bin/relating /usr/local/bin/relating
 COPY --from=web-builder /app/web/dist ./web/dist
 COPY docker/server/entrypoint.sh /usr/local/bin/relating-entrypoint.sh
-RUN chmod +x /usr/local/bin/relating-entrypoint.sh
+RUN chmod +x /usr/local/bin/relating-entrypoint.sh \
+    && chown -R relating:relating /app/web
 
 ENV RELATING_PORT=8080
 ENV RELATING_HOST=0.0.0.0
@@ -59,6 +65,9 @@ ENV RELATING_LOG_LEVEL=info
 
 VOLUME ["/app/data"]
 EXPOSE 8080
+
+# Never run as root: the API holds Aura credentials and executes migrations.
+USER relating
 
 ENTRYPOINT ["relating-entrypoint.sh"]
 CMD ["relating-server"]

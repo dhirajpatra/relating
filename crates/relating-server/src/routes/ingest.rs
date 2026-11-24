@@ -3,7 +3,9 @@ use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
 use relating_core::ProjectId;
-use relating_ingest::{extract_entities_and_relationships, load_extracted_to_graph, parse_source_content};
+use relating_ingest::{
+    extract_entities_and_relationships, load_extracted_to_graph, parse_source_content,
+};
 use relating_metadata::{get_approved_ontology, get_project as db_get_project, list_sources};
 use serde::Serialize;
 use tracing::info;
@@ -52,10 +54,7 @@ pub async fn run_ingestion_handler(
     let start_time = std::time::Instant::now();
 
     for source in &sources {
-        let stored_path_opt = source
-            .metadata
-            .get("stored_path")
-            .and_then(|v| v.as_str());
+        let stored_path_opt = source.metadata.get("stored_path").and_then(|v| v.as_str());
 
         let raw_bytes = if let Some(path_str) = stored_path_opt {
             std::fs::read(path_str).map_err(|e| {
@@ -93,12 +92,8 @@ pub async fn run_ingestion_handler(
     );
 
     // 4. Load into Relate database
-    let write_res = load_extracted_to_graph(
-        state.graph.as_ref(),
-        &graph_path,
-        &all_nodes,
-        &all_rels,
-    )?;
+    let write_res =
+        load_extracted_to_graph(state.graph.as_ref(), &graph_path, &all_nodes, &all_rels)?;
 
     let total_elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
 

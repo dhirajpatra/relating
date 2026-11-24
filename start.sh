@@ -14,9 +14,14 @@
 #
 # Environment overrides: RELATING_PORT, RELATING_HOST, RELATING_DATA_DIR,
 # RELATING_DATABASE_URL, RELATING_LOG_LEVEL, RELATING_MCP_TOKEN,
-# RELATING_SECRET_BACKEND, AURA_URI, AURA_PASSWORD, LLM_BACKEND, META_API_KEY.
+# RELATING_API_TOKEN, RELATING_SECRET_BACKEND, AURA_URI, AURA_PASSWORD,
+# LLM_BACKEND, META_API_KEY.
 # Any of these can be set in a `.env` file in this directory (see
 # .env.example) instead of exporting them.
+#
+# Platform: bash-only (Linux/macOS). On Windows, run it from WSL2 or
+# Git Bash with Rust, Node.js 20+, and cargo on PATH; native PowerShell
+# is not supported (see README "Windows" notes).
 #
 set -euo pipefail
 
@@ -90,7 +95,8 @@ Options:
 
 Environment overrides: RELATING_PORT, RELATING_HOST, RELATING_DATA_DIR,
 RELATING_DATABASE_URL, RELATING_LOG_LEVEL, RELATING_MCP_TOKEN,
-RELATING_SECRET_BACKEND, AURA_URI, AURA_PASSWORD, LLM_BACKEND, META_API_KEY.
+RELATING_API_TOKEN, RELATING_SECRET_BACKEND, AURA_URI, AURA_PASSWORD,
+LLM_BACKEND, META_API_KEY.
 
 A `.env` file next to this script (see .env.example) is loaded automatically;
 already-exported variables take precedence over it.

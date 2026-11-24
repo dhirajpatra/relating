@@ -21,10 +21,7 @@ pub fn parse_json_content(
         serde_json::Value::Array(arr) => arr,
         serde_json::Value::Object(obj) => {
             // Check if there is an array property like "items", "data", "records"
-            let array_val = obj
-                .values()
-                .find(|v| v.is_array())
-                .cloned();
+            let array_val = obj.values().find(|v| v.is_array()).cloned();
 
             if let Some(serde_json::Value::Array(arr)) = array_val {
                 arr

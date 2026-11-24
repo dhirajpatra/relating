@@ -9,8 +9,9 @@ pub async fn insert_source(pool: &SqlitePool, source: &Source) -> Result<(), Rel
         SourceStatus::Failed => "failed",
     };
 
-    let metadata_json = serde_json::to_string(&source.metadata)
-        .map_err(|e| RelatingError::Internal(format!("Failed to serialize source metadata: {}", e)))?;
+    let metadata_json = serde_json::to_string(&source.metadata).map_err(|e| {
+        RelatingError::Internal(format!("Failed to serialize source metadata: {}", e))
+    })?;
 
     sqlx::query(
         r#"
@@ -73,7 +74,8 @@ pub async fn get_source(pool: &SqlitePool, id: &SourceId) -> Result<Option<Sourc
                 _ => SourceStatus::Pending,
             };
 
-            let metadata: serde_json::Value = serde_json::from_str(&metadata_str).unwrap_or(serde_json::Value::Null);
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata_str).unwrap_or(serde_json::Value::Null);
 
             Ok(Some(Source {
                 id,
@@ -91,7 +93,10 @@ pub async fn get_source(pool: &SqlitePool, id: &SourceId) -> Result<Option<Sourc
     }
 }
 
-pub async fn list_sources(pool: &SqlitePool, project_id: &ProjectId) -> Result<Vec<Source>, RelatingError> {
+pub async fn list_sources(
+    pool: &SqlitePool,
+    project_id: &ProjectId,
+) -> Result<Vec<Source>, RelatingError> {
     let rows = sqlx::query(
         r#"
         SELECT id, project_id, filename, content_hash, content_type, byte_size, status, metadata, created_at
@@ -131,7 +136,8 @@ pub async fn list_sources(pool: &SqlitePool, project_id: &ProjectId) -> Result<V
             _ => SourceStatus::Pending,
         };
 
-        let metadata: serde_json::Value = serde_json::from_str(&metadata_str).unwrap_or(serde_json::Value::Null);
+        let metadata: serde_json::Value =
+            serde_json::from_str(&metadata_str).unwrap_or(serde_json::Value::Null);
 
         sources.push(Source {
             id,

@@ -1,12 +1,12 @@
 use crate::error::AppError;
 use crate::routes::aura::{build_backend, get_connection};
 use crate::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use relating_core::{AuraConnectionId, ProjectId};
 use relating_metadata::get_project as db_get_project;
 use relating_migrate::Neo4jBackend;
-use relating_portability::{build_report, scan_repository, PortableReport, TestAssertion};
+use relating_portability::{build_report, scan_repository, to_sarif, TestAssertion};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -59,11 +59,20 @@ fn parse_project(id_str: &str) -> Result<ProjectId, AppError> {
         .map_err(|e| AppError::BadRequest(format!("Invalid Project UUID '{}': {}", id_str, e)))
 }
 
+#[derive(Deserialize, Default)]
+pub struct ScanQuery {
+    /// `json` (default) for the native report, `sarif` for SARIF 2.1.0
+    /// (upload with `github/codeql-action/upload-sarif` for PR annotations).
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
 pub async fn scan_repo_handler(
     State(state): State<AppState>,
     Path(id_str): Path<String>,
+    Query(query): Query<ScanQuery>,
     Json(payload): Json<ScanRequest>,
-) -> Result<Json<PortableReport>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let project_id = parse_project(&id_str)?;
     let _ = db_get_project(&state.pool, &project_id)
         .await?
@@ -76,7 +85,22 @@ pub async fn scan_repo_handler(
     }
     // Scanning is CPU/IO-bound but short; run inline like other endpoints.
     let scan = scan_repository(std::path::Path::new(payload.repo_path.trim()))?;
-    Ok(Json(build_report(&scan)))
+    let report = build_report(&scan);
+    match query
+        .format
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("json") => serde_json::to_value(&report)
+            .map(Json)
+            .map_err(|e| AppError::Internal(format!("Failed to serialize report: {}", e))),
+        Some("sarif") => Ok(Json(to_sarif(&report))),
+        Some(other) => Err(AppError::BadRequest(format!(
+            "Unknown format '{}': expected 'json' or 'sarif'",
+            other
+        ))),
+    }
 }
 
 pub async fn run_tests_handler(

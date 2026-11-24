@@ -85,12 +85,12 @@ pub fn keyring_available() -> bool {
 // the workspace keyring spec, `Entry` silently uses the in-memory mock store
 // (writes report success and vanish on exit). These imports fail the build
 // if the backends ever go missing.
-#[cfg(all(feature = "os-keychain", target_os = "linux"))]
-#[allow(unused_imports)]
-use keyring::secret_service as _real_backend_guard;
 #[cfg(all(feature = "os-keychain", target_os = "macos"))]
 #[allow(unused_imports)]
 use keyring::macos as _real_backend_guard;
+#[cfg(all(feature = "os-keychain", target_os = "linux"))]
+#[allow(unused_imports)]
+use keyring::secret_service as _real_backend_guard;
 #[cfg(all(feature = "os-keychain", target_os = "windows"))]
 #[allow(unused_imports)]
 use keyring::windows as _real_backend_guard;
