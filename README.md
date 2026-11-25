@@ -49,9 +49,9 @@ Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ wit
 
 Then open http://127.0.0.1:8080 in your browser to use the workbench.
 
-The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `docker compose up --build` for the server (SQLite — enough to run the app and migrate), plus opt-in `--profile postgres`, `--profile ollama`, and `--profile neo4j` services, each with its own `Dockerfile` under `docker/` (see [docs/docker.md](docs/docker.md)).
+The script builds the web UI when missing, starts the API and serves the UI from it, and keeps project data in `./data` (override with `RELATING_DATA_DIR`). Useful options: `--port 8081` to change ports, `--release` for the optimized build, `--rebuild-web` to force a UI rebuild. Alternatively: `./start-with-docker.sh` for the containerized server (SQLite — enough to run the app and migrate; stop with `./stop-docker.sh`), plus opt-in `--profile postgres`, `--profile ollama`, and `--profile neo4j` services, each with its own `Dockerfile` under `docker/` (see [docs/docker.md](docs/docker.md)). The two start methods are alternatives: never run both at once (both bind port 8080), and note container data lives in the `relating-data` volume instead of `./data`.
 
-> Windows: `start.sh` and `migrate-aura.sh` are bash-only. Run them from WSL2 or Git Bash with Rust, Node.js 20+, Docker Desktop (compose v2), and Python 3 on PATH. Native PowerShell is not supported.
+> Windows: `start.sh`, `start-with-docker.sh`, `stop-docker.sh`, and `migrate-aura.sh` are bash-only. Run them from WSL2 or Git Bash with Rust, Node.js 20+, Docker Desktop (compose v2), and Python 3 on PATH. Native PowerShell is not supported.
 
 > The built-in mock AI provider is for **development and testing only** — it returns
 > deterministic canned responses and is never production AI functionality. Configure
@@ -515,6 +515,8 @@ relating/
 ├── docs/api/                # per-area API contracts
 ├── .github/workflows/       # CI gates, Aura nightly, releases
 ├── start.sh                 # one-command local start
+├── start-with-docker.sh     # one-command container start (see docker-compose.yml)
+├── stop-docker.sh           # stop the container stack (keeps volumes by default)
 ├── migrate-aura.sh          # Docker + approval-gated Aura migration script
 ├── docker/                  # one folder + Dockerfile per compose service
 │   ├── server/              # API + workbench UI + MCP (also used by db-init)
