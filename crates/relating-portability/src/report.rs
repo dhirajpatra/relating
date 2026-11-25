@@ -181,7 +181,11 @@ pub fn to_sarif(report: &PortableReport) -> serde_json::Value {
         .iter()
         .filter(|f| f.verdict != PortVerdict::Portable)
         .map(|finding| {
-            serde_json::json!({
+            // Note: remediation is prose guidance, not a code replacement, so
+            // it rides in `properties` — a SARIF `fix` object requires
+            // `artifactChanges`, which we cannot produce, and upload-sarif
+            // rejects results that carry a `fixes` entry without one.
+            let mut result = serde_json::json!({
                 "ruleId": finding.rule_id,
                 "level": sarif_level(finding.verdict),
                 "message": {"text": finding.message},
@@ -191,10 +195,11 @@ pub fn to_sarif(report: &PortableReport) -> serde_json::Value {
                         "region": {"startLine": finding.line.max(1)}
                     }
                 }],
-                "fixes": finding.remediation.as_ref().map(|text| {
-                    serde_json::json!([{"description": {"text": text}}])
-                }).unwrap_or(serde_json::json!([])),
-            })
+            });
+            if let Some(text) = finding.remediation.as_ref() {
+                result["properties"] = serde_json::json!({"remediation": text});
+            }
+            result
         })
         .collect();
     serde_json::json!({
@@ -281,5 +286,34 @@ mod tests {
             .as_array()
             .unwrap();
         assert!(rules.iter().any(|r| r["id"] == "R-PERIODIC"));
+    }
+
+    #[test]
+    fn test_sarif_results_carry_no_invalid_fixes() {
+        // upload-sarif rejects any result whose `fixes` entry lacks the
+        // required `artifactChanges` property, so remediation must never be
+        // emitted as a fix — it rides in `properties` instead.
+        let scan = scan_with(vec![
+            "USING PERIODIC COMMIT 100 LOAD CSV FROM 'f' AS r CREATE (n:N)",
+        ]);
+        let report = build_report(&scan);
+        let sarif = to_sarif(&report);
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        assert!(!results.is_empty());
+        for result in results {
+            assert!(
+                result.get("fixes").is_none(),
+                "result must not carry fixes: {}",
+                result
+            );
+        }
+        let periodic = results
+            .iter()
+            .find(|r| r["ruleId"] == "R-PERIODIC")
+            .unwrap();
+        assert!(periodic["properties"]["remediation"]
+            .as_str()
+            .unwrap()
+            .contains("UNWIND"));
     }
 }

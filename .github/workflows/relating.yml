@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
   packages: write
+  # The portability SARIF upload (github/codeql-action/upload-sarif) needs
+  # this; without it the upload fails with "Resource not accessible by
+  # integration".
+  security-events: write
 
 jobs:
   lint-test:
