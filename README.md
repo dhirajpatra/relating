@@ -13,6 +13,32 @@ Relating is a local-first, AI-native graph development and GraphRAG workbench. I
 
 ---
 
+## Use case
+
+Relating is a local-first, AI-native graph development and GraphRAG workbench: create isolated projects, ingest CSV/JSON/text/PDF/DOCX, propose and approve an ontology with AI, extract entities and relationships, explore with Cypher, build hybrid retrieval and grounded Q&A, connect agents over MCP, and migrate approved data to Neo4j Aura. The relationships that matter are each project's own domain entities and their connections (people, documents, products, papers, or whatever the project ontology defines), plus provenance links from every node/relationship back to its source chunk and file.
+
+## How it uses Relate
+
+- Mode: single file
+- Why this mode: one isolated, persistent `.rl` store per project survives restarts, backs up/copies/migrates as a single file, and enforces project-scoped isolation without running a separate server — a better fit for Relating's local-first, per-project design than in-memory (no durability) or directory mode (harder to copy, verify, and migrate per project).
+- What the graph models: the per-project domain graph — ontology-typed entity nodes, typed relationship edges, and provenance to source documents/chunks — which powers the explorer, Cypher console, retrieval/Q&A evidence, and the Aura migration source.
+
+## Setup and run
+
+Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ with npm. Optional: Ollama (`ollama serve`) for local AI, Docker with compose v2, Python 3 for `migrate-aura.sh`.
+
+```bash
+./start.sh
+```
+
+Then open http://127.0.0.1:8080 for the workbench (API + UI, data in `./data`, override with `RELATING_DATA_DIR`). Headless: `cargo run -p relating-cli -- validate --project ID`. Full options below in [Quick start](#quick-start).
+
+## Where the data lives
+
+`data/projects/<project-id>/graph.rl` — one single-file Relate store per project (data root overridable via `RELATING_DATA_DIR`).
+
+---
+
 ## Quick start
 
 Prerequisites: Rust stable (via [rustup](https://rustup.rs)) and Node.js 20+ with npm. Optional: Ollama (`ollama serve`) for local AI models, Docker with compose v2 for the container stack, and Python 3 for `migrate-aura.sh`.
