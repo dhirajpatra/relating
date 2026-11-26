@@ -1,5 +1,7 @@
 # Relating
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/dhirajpatra/relating)](https://m8ven.ai/mcp/dhirajpatra/relating?s=readme)
+
 ![Relating](./docs/images/Relating_Graph_Intelligence_for_Developers.png)
 [About the project](about_the_project.md)
 
