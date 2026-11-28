@@ -325,12 +325,21 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
                         }
                     }
                 } else if query.contains("DELETE") {
-                    // Rollback deletes: remove records carrying the tag.
+                    // Rollback deletes remove all tagged records; propagate
+                    // deletes carry $missing and remove only those uids.
                     let mid = params
                         .get("mid")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
+                    let missing: Option<HashSet<String>> = match params.get("missing") {
+                        Some(BoltValue::List(uids)) => Some(
+                            uids.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect(),
+                        ),
+                        _ => None,
+                    };
                     if query.contains("DETACH DELETE") {
                         let mut guard = state.lock().await;
                         let tagged: Vec<(String, String)> = guard
@@ -338,6 +347,9 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
                             .iter()
                             .filter(|(_, tag)| **tag == mid)
                             .map(|(key, _)| key.clone())
+                            .filter(|(_, uid)| {
+                                missing.as_ref().map(|m| m.contains(uid)).unwrap_or(true)
+                            })
                             .collect();
                         let deleted = tagged.len() as i64;
                         for (label, uid) in tagged {
@@ -357,6 +369,9 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
                             .iter()
                             .filter(|(_, tag)| **tag == mid)
                             .map(|(key, _)| key.clone())
+                            .filter(|(_, uid)| {
+                                missing.as_ref().map(|m| m.contains(uid)).unwrap_or(true)
+                            })
                             .collect();
                         let deleted = tagged.len() as i64;
                         for (rel_type, uid) in &tagged {
@@ -389,6 +404,32 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<FakeState>>) 
                         .nodes
                         .get(&label)
                         .map(|t| t.keys().cloned().collect())
+                        .unwrap_or_default();
+                    drop(guard);
+                    uids.sort();
+                    for uid in uids {
+                        if !send_message(
+                            &mut stream,
+                            0x71,
+                            &[BoltValue::List(vec![BoltValue::String(uid)])],
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                    if !send_success(&mut stream, vec![]).await {
+                        break;
+                    }
+                } else if query.contains("RETURN r.uid") {
+                    let rel_type = fake_rel_type(&query)
+                        .or_else(|| fake_label(&query))
+                        .unwrap_or_default();
+                    let guard = state.lock().await;
+                    let mut uids: Vec<String> = guard
+                        .rel_uids
+                        .get(&rel_type)
+                        .map(|s| s.iter().cloned().collect())
                         .unwrap_or_default();
                     drop(guard);
                     uids.sort();

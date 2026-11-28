@@ -24,9 +24,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-chrono = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

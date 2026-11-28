@@ -17,6 +17,10 @@ pub struct McpState {
     pub pool: DbPool,
     pub graph: Arc<RelateBackend>,
     pub data_dir: PathBuf,
+    /// HTTP bearer token snapshotted at boot (`RELATING_MCP_TOKEN`), like the
+    /// API server's `AppState.api_token`. `None` disables the HTTP transport.
+    /// The stdio transport is local-only and ignores this field.
+    pub mcp_token: Option<String>,
 }
 
 impl McpState {
@@ -274,6 +278,7 @@ mod tests {
             pool,
             graph: Arc::new(RelateBackend::new()),
             data_dir,
+            mcp_token: None,
         };
         (state, project.id)
     }

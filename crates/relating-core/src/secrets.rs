@@ -13,7 +13,9 @@
 //! - `keyring`: OS keychain first (service `relating`, account `<NAME>`),
 //!   then environment, then file. Requires the `os-keychain` feature.
 //!
-//! Secrets are never logged: errors name the variable, never the value.
+//! Anything else fails closed: no backend is consulted and resolution errors
+//! name the valid modes. Secrets are never logged: errors name the variable,
+//! never the value.
 
 /// Backends consulted by [`resolve_secret`], in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,14 +26,16 @@ pub enum SecretBackend {
 }
 
 /// Parse `RELATING_SECRET_BACKEND` into an ordered backend list.
-/// Unknown values fall back to `auto` rather than failing closed at config
-/// time; callers surface resolution errors that name the variable.
+/// Unknown values fail closed to an empty list — a typo must never silently
+/// downgrade to a weaker backend than the operator intended. Callers surface
+/// resolution errors that name the variable and the valid modes.
 pub fn backend_order() -> Vec<SecretBackend> {
     let mode = std::env::var("RELATING_SECRET_BACKEND")
         .unwrap_or_else(|_| "auto".to_string())
         .trim()
         .to_ascii_lowercase();
     match mode.as_str() {
+        "auto" | "" => vec![SecretBackend::Env, SecretBackend::File],
         "env" => vec![SecretBackend::Env],
         "file" => vec![SecretBackend::File, SecretBackend::Env],
         "keyring" => vec![
@@ -39,7 +43,7 @@ pub fn backend_order() -> Vec<SecretBackend> {
             SecretBackend::Env,
             SecretBackend::File,
         ],
-        _ => vec![SecretBackend::Env, SecretBackend::File],
+        _ => Vec::new(),
     }
 }
 
@@ -166,6 +170,12 @@ pub fn delete_secret(name: &str) -> Result<(), String> {
 }
 
 fn missing_secret_message(name: &str) -> String {
+    if backend_order().is_empty() {
+        return format!(
+            "Secret '{}' cannot resolve: RELATING_SECRET_BACKEND names an unknown mode (valid: auto, env, file, keyring)",
+            name
+        );
+    }
     let mut hints = vec![format!(
         "export {}='<secret>' (the value is never stored)",
         name
@@ -189,10 +199,7 @@ fn missing_secret_message(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // Environment is process-global; serialize the tests that mutate it.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::ENV_LOCK;
 
     struct EnvGuard {
         saved_backend: Option<String>,
@@ -245,11 +252,12 @@ mod tests {
         );
         std::env::set_var("RELATING_SECRET_BACKEND", "env");
         assert_eq!(backend_order(), vec![SecretBackend::Env]);
+        // Unknown modes fail closed: no backend is consulted.
         std::env::set_var("RELATING_SECRET_BACKEND", "nonsense");
-        assert_eq!(
-            backend_order(),
-            vec![SecretBackend::Env, SecretBackend::File]
-        );
+        assert!(backend_order().is_empty());
+        std::env::set_var("RELATING_TEST_SECRET_X1", "present-but-unreadable");
+        let err = resolve_secret("RELATING_TEST_SECRET_X1").unwrap_err();
+        assert!(err.contains("unknown mode"), "{}", err);
     }
 
     #[test]

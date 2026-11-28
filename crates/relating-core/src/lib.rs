@@ -1,7 +1,14 @@
 pub mod env_config;
 pub mod error;
+pub mod identity;
 pub mod models;
 pub mod secrets;
+
+/// Process-wide lock serializing every test that mutates process env.
+/// Each test binary is one process, so one shared lock per crate is the
+/// unit that matters — per-module locks still race each other.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub use env_config::{
     aura_connection_from_env, aura_env_connection_id, aura_env_status, aura_uri_looks_valid,
@@ -34,6 +41,10 @@ pub fn load_dotenv() -> usize {
     applied
 }
 pub use error::RelatingError;
+pub use identity::{
+    authorize, base64url_decode, base64url_encode, constant_time_eq, is_jwt_shape, sha256_hex,
+    verify_jwt_hs256, Actor, ActorContext, JwtClaims, OidcConfig, Role, JWT_LEEWAY_SECS,
+};
 pub use models::*;
 pub use secrets::{
     backend_order, delete_secret, keyring_available, resolve_secret, store_secret, SecretBackend,

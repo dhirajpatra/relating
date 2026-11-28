@@ -74,6 +74,14 @@ cargo run -p relating-cli -- portability scan --dir . --emit sarif --out portabi
   `RELATING_API_TOKEN` at startup), never from env per-request, so tests
   stay hermetic. `/api/v1/health` is always open; everything else under
   `/api/v1/` needs `Authorization: Bearer <token>` when set.
+- Locked mode (static token and/or OIDC) resolves `ActorContext` per
+  request: static token (admin), session token, or verified HS256 JWT for
+  a linked identity. RBAC is viewer/editor/global-admin; handlers read
+  the actor via `Extension<ActorContext>`. Tests build hermetic auth via
+  `AuthState::default()` (open) or `AuthState::with_oidc(test_config)`.
+- Process env is global: one shared `ENV_LOCK` per crate serializes every
+  env-mutating test — per-module locks still race (fail-closed backends
+  widen the blast radius).
 
 ## Testing conventions
 

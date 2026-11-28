@@ -29,6 +29,13 @@ pub fn expected_tables() -> Vec<String> {
         "migrations",
         "schema_revisions",
         "retrieval_configs",
+        "sync_state",
+        "users",
+        "identities",
+        "grants",
+        "sessions",
+        "pending_logins",
+        "audit_log",
     ]
     .into_iter()
     .map(|s| s.to_string())

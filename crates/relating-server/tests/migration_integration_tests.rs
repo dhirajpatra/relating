@@ -3,7 +3,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use relating_graph::RelateBackend;
 use relating_metadata::init_in_memory_db;
-use relating_server::{create_router, AppState};
+use relating_server::{create_router, AppState, AuthState};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -22,6 +22,7 @@ async fn setup_test_app() -> (axum::Router, tempfile::TempDir) {
         graph: Arc::new(RelateBackend::new()),
         data_dir: dir.path().to_path_buf(),
         api_token: None,
+        auth: AuthState::default(),
     };
     let app = create_router(state);
     (app, dir)
@@ -641,6 +642,290 @@ async fn test_rollback_removes_only_what_the_migration_created() {
     let guard = fake_state.lock().await;
     assert_eq!(guard.nodes.get("Person").map(|t| t.len()), Some(0));
     assert_eq!(guard.rel_uids.get("KNOWS").map(|s| s.len()), Some(0));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn test_delta_sync_transfers_new_records_and_propagates_deletes() {
+    std::env::set_var(TEST_PASSWORD_ENV, "test-password");
+    let (uri, server, fake_state) = start_fake_bolt().await;
+    let (app, _dir) = setup_test_app().await;
+
+    let pid = seed_project_with_cypher(
+        &app,
+        "Delta sync",
+        &[
+            "CREATE (:Person {uid: 'Person:1', name: 'Ada'})",
+            "CREATE (:Person {uid: 'Person:2', name: 'Bob'})",
+        ],
+    )
+    .await;
+    let cid = connect_fake_bolt(&app, &pid, &uri).await;
+    let (status, plan) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/plan", pid),
+        json!({"connection_id": cid}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mid = plan["migration"]["id"].as_str().unwrap().to_string();
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/approve", pid, mid),
+        json!({"approved": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, executed) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(executed["progress"]["sync_mode"], "full");
+    assert!(executed["progress"]["last_sync"].is_string());
+    assert!(executed["progress"]["high_water_mark"].is_string());
+
+    // Add one node, then delta re-execute in place (no new plan needed).
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/cypher/write", pid),
+        json!({"query": "CREATE (:Person {uid: 'Person:3', name: 'Cyd'})"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, synced) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/sync", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(synced["status"], "completed");
+    assert_eq!(synced["progress"]["sync_mode"], "delta");
+    assert_eq!(synced["progress"]["nodes_migrated"], 3);
+    assert_eq!(
+        fake_state.lock().await.nodes.get("Person").map(|t| t.len()),
+        Some(3)
+    );
+
+    // Delete one source node: plain sync leaves the target copy (merge-upsert
+    // never deletes); sync with propagation removes it.
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/cypher/write", pid),
+        json!({"query": "MATCH (n:Person {uid: 'Person:2'}) DETACH DELETE n"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/projects/{}/migrations/{}/sync?propagate_deletes=true",
+                    pid, mid
+                ))
+                .header("Content-Type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let propagated: Value = serde_json::from_slice(&body).unwrap();
+    assert!(propagated["progress"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("delete propagation"));
+    assert_eq!(
+        fake_state.lock().await.nodes.get("Person").map(|t| t.len()),
+        Some(2)
+    );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn test_drift_detector_reports_without_changing_status() {
+    std::env::set_var(TEST_PASSWORD_ENV, "test-password");
+    let (uri, server, _fake_state) = start_fake_bolt().await;
+    let (app, _dir) = setup_test_app().await;
+
+    let pid = seed_project_with_cypher(
+        &app,
+        "Drift check",
+        &["CREATE (:Person {uid: 'Person:1', name: 'Ada'})"],
+    )
+    .await;
+    let cid = connect_fake_bolt(&app, &pid, &uri).await;
+    let (status, plan) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/plan", pid),
+        json!({"connection_id": cid}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mid = plan["migration"]["id"].as_str().unwrap().to_string();
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/approve", pid, mid),
+        json!({"approved": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/verify", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, clean) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/drift", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(clean["drifted"], false);
+
+    // New source record drifts from the target snapshot.
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/cypher/write", pid),
+        json!({"query": "CREATE (:Person {uid: 'Person:2', name: 'Bob'})"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, drifted) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/drift", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(drifted["drifted"], true);
+
+    // Drift checks never flip migration status.
+    let (status, migration) =
+        get_json(&app, format!("/api/v1/projects/{}/migrations/{}", pid, mid)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(migration["status"], "verified");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn test_changes_feed_returns_watermarked_page() {
+    let (app, _dir) = setup_test_app().await;
+    let pid = seed_project_with_cypher(
+        &app,
+        "Changes feed",
+        &[
+            "CREATE (:Person {uid: 'Person:1', _updated_at: '2026-01-01T00:00:00Z'})",
+            "CREATE (:Person {uid: 'Person:2', _updated_at: '2026-06-01T00:00:00Z'})",
+            "CREATE (:Person {uid: 'Person:3'})",
+        ],
+    )
+    .await;
+
+    let (status, all) = get_json(&app, format!("/api/v1/projects/{}/changes", pid)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(all["row_count"], 3);
+
+    // Watermark filters timestamped rows; legacy rows without _updated_at
+    // always count as changed.
+    let (status, page) = get_json(
+        &app,
+        format!(
+            "/api/v1/projects/{}/changes?since=2026-03-01T00:00:00Z",
+            pid
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["row_count"], 2);
+}
+
+#[tokio::test]
+async fn test_stable_rescan_has_no_skip_or_dupe_after_concurrent_write() {
+    std::env::set_var(TEST_PASSWORD_ENV, "test-password");
+    let (uri, server, fake_state) = start_fake_bolt().await;
+    let (app, _dir) = setup_test_app().await;
+
+    // Small batches force multi-page SKIP/LIMIT scans.
+    let pid = seed_project_with_cypher(
+        &app,
+        "Stable scan",
+        &[
+            "CREATE (:Person {uid: 'Person:1'})",
+            "CREATE (:Person {uid: 'Person:2'})",
+            "CREATE (:Person {uid: 'Person:3'})",
+        ],
+    )
+    .await;
+    let cid = connect_fake_bolt(&app, &pid, &uri).await;
+    let (status, plan) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/plan", pid),
+        json!({"connection_id": cid, "batch_size": 1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mid = plan["migration"]["id"].as_str().unwrap().to_string();
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/approve", pid, mid),
+        json!({"approved": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Concurrent-style write between full load and delta rescan.
+    let (status, _) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/cypher/write", pid),
+        json!({"query": "CREATE (:Person {uid: 'Person:0'})"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, synced) = post_json(
+        &app,
+        format!("/api/v1/projects/{}/migrations/{}/execute", pid, mid),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(synced["progress"]["sync_mode"], "delta");
+
+    // All four uids land exactly once: ORDER BY scans neither skip the
+    // early-sorting new row nor duplicate existing ones.
+    let guard = fake_state.lock().await;
+    let table = guard.nodes.get("Person").unwrap();
+    assert_eq!(table.len(), 4);
+    for uid in ["Person:0", "Person:1", "Person:2", "Person:3"] {
+        assert!(table.contains_key(uid), "missing {}", uid);
+    }
 
     server.abort();
 }

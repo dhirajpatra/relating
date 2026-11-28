@@ -14,6 +14,12 @@ pub enum AppError {
     #[error("Bad request: {0}")]
     BadRequest(String),
 
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
     #[error("Graph error: {0}")]
     Graph(#[from] GraphError),
 
@@ -59,6 +65,8 @@ impl IntoResponse for AppError {
         let (status, code, message) = match &self {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "NOT_FOUND", msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "BAD_REQUEST", msg.clone()),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, "FORBIDDEN", msg.clone()),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", msg.clone()),
             AppError::Core(RelatingError::ProjectNotFound(msg)) => {
                 (StatusCode::NOT_FOUND, "PROJECT_NOT_FOUND", msg.clone())
             }

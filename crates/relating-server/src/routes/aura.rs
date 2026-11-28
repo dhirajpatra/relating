@@ -15,6 +15,38 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_AUTH_ENV_VAR: &str = "AURA_PASSWORD";
 
+/// Allowlisted secret names: a connection must point at an `AURA_*` /
+/// `RELATING_*` variable or a `*_PASSWORD` / `*_TOKEN` / `*_SECRET` /
+/// `*_KEY` name. Free-form names could exfiltrate unrelated process
+/// environment (AWS keys, session tokens) into connection error paths.
+pub fn validate_auth_env_var(raw: Option<String>) -> Result<String, AppError> {
+    let name = raw
+        .unwrap_or_else(|| DEFAULT_AUTH_ENV_VAR.to_string())
+        .trim()
+        .to_string();
+    let shape_ok = !name.is_empty()
+        && name.bytes().next().is_some_and(|b| b.is_ascii_uppercase())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+    if !shape_ok {
+        return Err(AppError::BadRequest(
+            "auth_env_var must be UPPER_SNAKE_CASE (e.g. AURA_PASSWORD)".to_string(),
+        ));
+    }
+    let allowed = name.starts_with("AURA_")
+        || name.starts_with("RELATING_")
+        || ["_PASSWORD", "_TOKEN", "_SECRET", "_KEY"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix));
+    if !allowed {
+        return Err(AppError::BadRequest(
+            "auth_env_var must start with AURA_ or RELATING_, or end with _PASSWORD, _TOKEN, _SECRET, or _KEY".to_string(),
+        ));
+    }
+    Ok(name)
+}
+
 #[derive(Deserialize)]
 pub struct CreateConnectionRequest {
     pub name: String,
@@ -87,6 +119,8 @@ pub async fn create_connection_handler(
     BoltUri::parse(payload.uri.trim())
         .map_err(|e| AppError::BadRequest(format!("Invalid Aura URI: {}", e)))?;
 
+    let auth_env_var = validate_auth_env_var(payload.auth_env_var)?;
+
     let conn = AuraConnection {
         id: AuraConnectionId::new(),
         project_id,
@@ -94,9 +128,7 @@ pub async fn create_connection_handler(
         uri: payload.uri.trim().to_string(),
         username: payload.username.unwrap_or_else(|| "neo4j".to_string()),
         database: payload.database,
-        auth_env_var: payload
-            .auth_env_var
-            .unwrap_or_else(|| DEFAULT_AUTH_ENV_VAR.to_string()),
+        auth_env_var,
         created_at: Utc::now(),
     };
 

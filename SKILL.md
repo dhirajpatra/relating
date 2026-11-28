@@ -198,9 +198,13 @@ destructive operations out of the default path.
 - Include `.env.example` with placeholders only.
 - Apply project-level authorization on every API and MCP operation.
 - Gate `/api/v1` with the `RELATING_API_TOKEN` bearer token on any shared host; bind published container ports to 127.0.0.1.
+- SSO (HS256 OIDC): `RELATING_OIDC_ISSUER` + `RELATING_OIDC_AUDIENCE` enable login/callback sessions; JWTs verify signature, issuer, audience, and expiry with no new dependencies. RS256 needs the `jsonwebtoken` follow-up.
+- RBAC: viewer reads, editor writes, global admin manages grants; migration approvals need a second SSO actor; creators become project admins.
+- Compare bearer tokens in constant time; lock client keys out after 5 consecutive 401s (60s, `/health` exempt).
+- Provider API keys are write-only (accepted on create, never returned); connection `auth_env_var` names are allowlisted.
 - Use TLS for remote connections.
 - Add request validation, upload limits, query timeouts, row/result caps, and rate limits.
-- Audit access, ingestion, model calls, graph writes, and migrations.
+- Audit access, ingestion, model calls, graph writes, and migrations into the hash-chained `audit_log` (JSON/CSV export per project, chain verified on every export).
 - Do not transmit user data to a hosted AI provider until the provider is configured and consent/policy permits it.
 - Avoid logging raw document contents or sensitive prompts by default.
 - Validate dependency and container licenses.

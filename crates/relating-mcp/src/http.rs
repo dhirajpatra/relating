@@ -10,6 +10,15 @@ use relating_core::ProjectId;
 pub const MCP_TOKEN_ENV_VAR: &str = "RELATING_MCP_TOKEN";
 pub const MCP_PROJECT_HEADER: &str = "x-relating-project";
 
+/// Read the MCP HTTP token from the environment: trimmed, empty as unset.
+/// Called once at router construction so tests stay hermetic.
+pub fn mcp_token_from_env() -> Option<String> {
+    std::env::var(MCP_TOKEN_ENV_VAR)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 pub fn create_mcp_router(state: McpState) -> axum::Router<()> {
     let registry = std::sync::Arc::new(build_registry());
     axum::Router::new()
@@ -19,6 +28,30 @@ pub fn create_mcp_router(state: McpState) -> axum::Router<()> {
 }
 
 type McpRouterState = (McpState, std::sync::Arc<crate::protocol::ToolRegistry>);
+
+/// True when an opaque login session token is live and its user holds any
+/// grant (global or project) for this project. Fixes the old
+/// same-token-unlocks-all scoping for SSO callers.
+async fn session_authorizes_project(
+    state: &McpState,
+    presented: &str,
+    project: &ProjectId,
+) -> bool {
+    let Ok(Some(session)) =
+        relating_metadata::find_session_by_hash(&state.pool, &relating_core::sha256_hex(presented))
+            .await
+    else {
+        return false;
+    };
+    if session.expires_at <= chrono::Utc::now() {
+        return false;
+    }
+    let project_id = project.to_string();
+    let global = relating_metadata::user_global_role(&state.pool, &session.user_id).await;
+    let scoped =
+        relating_metadata::user_project_role(&state.pool, &session.user_id, &project_id).await;
+    matches!(global, Ok(Some(_))) || matches!(scoped, Ok(Some(_)))
+}
 
 pub async fn mcp_health_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({
@@ -44,30 +77,6 @@ pub async fn mcp_post_handler(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    // HTTP transport is disabled until an operator configures a token.
-    let expected = match std::env::var(MCP_TOKEN_ENV_VAR) {
-        Ok(token) if !token.is_empty() => token,
-        _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "MCP HTTP transport is disabled: set RELATING_MCP_TOKEN to enable it"
-                })),
-            )
-                .into_response();
-        }
-    };
-    match bearer_token(&headers) {
-        Some(token) if token == expected => {}
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "Invalid or missing bearer token"})),
-            )
-                .into_response();
-        }
-    }
-
     let project = match headers
         .get(MCP_PROJECT_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -82,6 +91,28 @@ pub async fn mcp_post_handler(
                 .into_response();
         }
     };
+
+    // Static token (constant-time) is a global admin; login session tokens
+    // are scoped to the caller's grants for this project (MCP tools are
+    // read-only, so any grant suffices).
+    let presented = bearer_token(&headers).unwrap_or_default();
+    let mut authorized = matches!(
+        state.mcp_token.as_deref(),
+        Some(expected) if relating_core::constant_time_eq(&presented, expected)
+    );
+    if !authorized && !presented.is_empty() {
+        authorized = session_authorizes_project(&state, &presented, &project).await;
+    }
+    if !authorized {
+        let (status, message) = match &state.mcp_token {
+            None if presented.is_empty() => (
+                StatusCode::FORBIDDEN,
+                "MCP HTTP transport is disabled: set RELATING_MCP_TOKEN to enable it",
+            ),
+            _ => (StatusCode::UNAUTHORIZED, "Invalid or missing bearer token"),
+        };
+        return (status, Json(serde_json::json!({"error": message}))).into_response();
+    }
 
     let req: JsonRpcRequest = match serde_json::from_str(&body) {
         Ok(req) => req,
@@ -117,6 +148,8 @@ mod tests {
             pool,
             graph: Arc::new(RelateBackend::new()),
             data_dir: dir.path().to_path_buf(),
+            // Hermetic: no static token here regardless of process env.
+            mcp_token: None,
         };
         (create_mcp_router(state), dir)
     }

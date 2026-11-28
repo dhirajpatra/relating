@@ -85,6 +85,7 @@ async fn main() {
         pool,
         graph: Arc::new(RelateBackend::new()),
         data_dir,
+        mcp_token: None,
     };
 
     if let Err(e) = run_stdio(state, project_id).await {

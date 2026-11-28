@@ -28,9 +28,11 @@ pub use bolt::{chunk_message, BoltClient, BoltConfig, BoltUri};
 pub use compat::{analyze_source, analyze_target, CapabilityVerdict, CompatFinding};
 pub use error::MigrateError;
 pub use execute::{
-    migrate_node_batch, migrate_node_batch_with_options, migrate_relationship_batch,
-    migrate_relationship_batch_with_options, relationship_uid, rollback_migration, BatchOutcome,
-    RollbackOutcome, MIGRATION_TAG_PROPERTY,
+    is_hash_fallback_uid, migrate_node_batch, migrate_node_batch_with_options,
+    migrate_relationship_batch, migrate_relationship_batch_with_options, propagate_node_deletes,
+    propagate_rel_deletes, relationship_uid, rollback_migration, BatchOutcome,
+    DeletePropagationOutcome, RollbackOutcome, MIGRATION_TAG_PROPERTY, UPDATED_AT_PROPERTY,
+    VERSION_PROPERTY,
 };
 pub use packstream::{
     bolt_to_json, decode_message, encode_message, json_to_bolt, BoltNode, BoltRelationship,

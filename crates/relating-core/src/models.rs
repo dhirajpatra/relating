@@ -86,6 +86,15 @@ impl AiProviderConfig {
             embedding_dimensions: Some(1536),
         }
     }
+
+    /// Copy safe for API responses: provider keys are accepted on write and
+    /// used internally, but never returned to clients.
+    pub fn redacted(&self) -> Self {
+        Self {
+            api_key: None,
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -629,6 +638,23 @@ pub struct MigrationProgress {
     pub completed_batches: Vec<String>,
     #[serde(default)]
     pub message: Option<String>,
+    /// Last completed batch key (or source watermark) for incremental sync.
+    #[serde(default)]
+    pub high_water_mark: Option<String>,
+    /// Wall-clock time of the last successful sync batch.
+    #[serde(default)]
+    pub last_sync: Option<DateTime<Utc>>,
+    /// `"full"` for initial loads, `"delta"` for incremental re-syncs.
+    #[serde(default)]
+    pub sync_mode: Option<String>,
+    /// Actor display strings (`user:<email>`, `api-token`, `anonymous`) for
+    /// the compliance trail: who planned, approved, and last executed.
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub approved_by: Option<String>,
+    #[serde(default)]
+    pub executed_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -704,5 +730,39 @@ impl Default for RetrievalConfig {
             default_top_k: 5,
             updated_at: Utc::now(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_migration_progress_legacy_json_still_deserializes() {
+        let legacy = serde_json::json!({
+            "batches_done": 2,
+            "batches_total": 5,
+            "nodes_migrated": 10,
+            "relationships_migrated": 4,
+            "completed_batches": ["nodes:Person:0"],
+            "message": "ok"
+        });
+        let progress: MigrationProgress = serde_json::from_value(legacy).unwrap();
+        assert_eq!(progress.batches_done, 2);
+        assert_eq!(progress.high_water_mark, None);
+        assert_eq!(progress.last_sync, None);
+        assert_eq!(progress.sync_mode, None);
+        assert_eq!(progress.created_by, None);
+        assert_eq!(progress.approved_by, None);
+        assert_eq!(progress.executed_by, None);
+    }
+
+    #[test]
+    fn test_ai_provider_config_redacted_drops_key() {
+        let mut cfg = AiProviderConfig::mock();
+        cfg.api_key = Some("sk-live".to_string());
+        let safe = cfg.redacted();
+        assert_eq!(safe.api_key, None);
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-live"));
     }
 }

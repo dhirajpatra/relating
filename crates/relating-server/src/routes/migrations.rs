@@ -1,12 +1,13 @@
 use crate::error::AppError;
 use crate::routes::aura::{build_backend, get_connection};
 use crate::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use chrono::Utc;
 use relating_core::{
-    AuraConnectionId, Migration, MigrationId, MigrationProgress, MigrationStatus, ProjectId,
+    Actor, ActorContext, AuraConnectionId, Migration, MigrationId, MigrationProgress,
+    MigrationStatus, ProjectId,
 };
 use relating_graph::GraphBackend;
 use relating_metadata::{
@@ -14,12 +15,14 @@ use relating_metadata::{
     list_migrations as db_list_migrations, update_migration,
 };
 use relating_migrate::{
-    analyze_project_with_options, dry_run, json_to_bolt, migrate_node_batch_with_options,
-    migrate_relationship_batch_with_options, preview_migration_with_options, rollback_migration,
-    source_blockers_for_dry_run, uid_list_hash, vector_blockers_for_project, verify_migration,
-    AnalysisOptions, BoltValue, CompatFinding, DegreeExpectation, DryRunReport, MigrationPlan,
-    Neo4jBackend, RollbackOutcome, SampleExpectation, SourceCounts, VerificationReport,
-    DEFAULT_BATCH_SIZE, MAX_HASH_UIDS_PER_LABEL, MIGRATION_TAG_PROPERTY,
+    analyze_project_with_options, dry_run, is_hash_fallback_uid, json_to_bolt,
+    migrate_node_batch_with_options, migrate_relationship_batch_with_options,
+    preview_migration_with_options, propagate_node_deletes, propagate_rel_deletes,
+    rollback_migration, source_blockers_for_dry_run, uid_list_hash, vector_blockers_for_project,
+    verify_migration, AnalysisOptions, BoltValue, CompatFinding, DegreeExpectation, DryRunReport,
+    MigrationPlan, Neo4jBackend, RollbackOutcome, SampleExpectation, SourceCounts,
+    VerificationReport, DEFAULT_BATCH_SIZE, MAX_HASH_UIDS_PER_LABEL, MIGRATION_TAG_PROPERTY,
+    UPDATED_AT_PROPERTY, VERSION_PROPERTY,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -67,6 +70,35 @@ pub struct ApproveRequest {
 
 fn escape_cypher_label(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
+}
+
+/// Stable node page scan: ORDER BY uid makes SKIP/LIMIT deterministic across
+/// concurrent writes. Skip/limit are internally computed integers only.
+fn build_node_page_query(label: &str, skip: usize, limit: usize) -> String {
+    format!(
+        "MATCH (n:{}) RETURN n AS node ORDER BY n.uid SKIP {} LIMIT {}",
+        escape_cypher_label(label),
+        skip,
+        limit
+    )
+}
+
+/// Stable relationship page scan: ORDER BY endpoints keeps pages stable.
+fn build_rel_page_query(rel_type: &str, skip: usize, limit: usize) -> String {
+    format!(
+        "MATCH (s)-[r:{}]->(t) RETURN s.uid AS suid, t.uid AS tuid, r AS rel ORDER BY s.uid, t.uid SKIP {} LIMIT {}",
+        escape_cypher_label(rel_type),
+        skip,
+        limit
+    )
+}
+
+/// Stable uid listing for content-hash verification.
+fn build_uid_list_query(label: &str) -> String {
+    format!(
+        "MATCH (n:{}) RETURN n.uid AS uid ORDER BY uid",
+        escape_cypher_label(label)
+    )
 }
 
 fn parse_project(id_str: &str) -> Result<ProjectId, AppError> {
@@ -127,6 +159,7 @@ pub async fn analyze_migration_handler(
 
 pub async fn plan_migration_handler(
     State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
     Path(id_str): Path<String>,
     Json(payload): Json<PlanRequest>,
 ) -> Result<(StatusCode, Json<PlanResponse>), AppError> {
@@ -176,6 +209,7 @@ pub async fn plan_migration_handler(
             .map_err(|e| AppError::Internal(format!("Failed to serialize plan: {}", e)))?,
         progress: MigrationProgress {
             batches_total: plan.total_batches,
+            created_by: Some(actor.actor.display()),
             ..Default::default()
         },
         report: serde_json::Value::Null,
@@ -255,6 +289,7 @@ pub async fn dry_run_handler(
 
 pub async fn approve_migration_handler(
     State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
     Path((id_str, mid_str)): Path<(String, String)>,
     Json(payload): Json<ApproveRequest>,
 ) -> Result<Json<Migration>, AppError> {
@@ -269,9 +304,22 @@ pub async fn approve_migration_handler(
 
     if !payload.approved {
         migration.status = MigrationStatus::Planned;
+        migration.progress.approved_by = None;
         migration.progress.message = Some("Approval revoked by user".to_string());
         update_migration(&state.pool, &migration).await?;
         return Ok(Json(migration));
+    }
+
+    // Second-actor rule for SSO users: the planner cannot approve their own
+    // migration. Break-glass (api-token) and open (anonymous) modes are
+    // exempt — there is no second identity to compare against.
+    if let Actor::User { email, .. } = &actor.actor {
+        if migration.progress.created_by.as_deref() == Some(format!("user:{}", email).as_str()) {
+            return Err(AppError::BadRequest(
+                "Approvals need a second actor: the planner cannot approve their own migration"
+                    .to_string(),
+            ));
+        }
     }
 
     let blockers = migration
@@ -289,9 +337,48 @@ pub async fn approve_migration_handler(
     }
 
     migration.status = MigrationStatus::Approved;
-    migration.progress.message = Some("Approved by user; ready to execute".to_string());
+    migration.progress.approved_by = Some(actor.actor.display());
+    migration.progress.message = Some(format!(
+        "Approved by {}; ready to execute",
+        actor.actor.display()
+    ));
+    crate::routes::audit::audit_event(
+        &state.pool,
+        &actor.actor.display(),
+        "migration.approved",
+        &format!("/api/v1/projects/{}/migrations/{}", id_str, mid),
+        "ok",
+        "",
+    )
+    .await;
     update_migration(&state.pool, &migration).await?;
     Ok(Json(migration))
+}
+
+/// Stamp optimistic-concurrency fields: preserve the source version when it
+/// carries one, otherwise start at 1 with the current timestamp. The target
+/// MERGE only overwrites when the incoming version is newer.
+fn stamp_version(
+    bolt_props: &mut BTreeMap<String, BoltValue>,
+    source_props: &serde_json::Map<String, serde_json::Value>,
+) {
+    if !bolt_props.contains_key(VERSION_PROPERTY) {
+        let version = source_props
+            .get(VERSION_PROPERTY)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1)
+            .max(1);
+        bolt_props.insert(VERSION_PROPERTY.to_string(), BoltValue::Int(version));
+    }
+    if !bolt_props.contains_key(UPDATED_AT_PROPERTY) {
+        let now = Utc::now().to_rfc3339();
+        let stamp = source_props
+            .get(UPDATED_AT_PROPERTY)
+            .and_then(|v| v.as_str())
+            .unwrap_or(&now)
+            .to_string();
+        bolt_props.insert(UPDATED_AT_PROPERTY.to_string(), BoltValue::String(stamp));
+    }
 }
 
 fn node_rows_from_page(
@@ -329,6 +416,7 @@ fn node_rows_from_page(
                 bolt_props.insert(k.clone(), json_to_bolt(v));
             }
         }
+        stamp_version(&mut bolt_props, props);
         let mut bolt_row = BTreeMap::new();
         bolt_row.insert("uid".to_string(), BoltValue::String(uid));
         bolt_row.insert("props".to_string(), BoltValue::Map(bolt_props));
@@ -370,6 +458,7 @@ fn rel_rows_from_page(
                         bolt_props.insert(k.clone(), json_to_bolt(v));
                     }
                 }
+                stamp_version(&mut bolt_props, map);
                 let mut bolt_row = BTreeMap::new();
                 bolt_row.insert("uid".to_string(), BoltValue::String(uid));
                 bolt_row.insert("suid".to_string(), BoltValue::String(s.to_string()));
@@ -385,6 +474,7 @@ fn rel_rows_from_page(
 
 pub async fn execute_migration_handler(
     State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
     Path((id_str, mid_str)): Path<(String, String)>,
 ) -> Result<Json<Migration>, AppError> {
     let project_id = parse_project(&id_str)?;
@@ -397,9 +487,23 @@ pub async fn execute_migration_handler(
         .ok_or_else(|| AppError::NotFound(format!("Migration '{}' not found", mid)))?;
 
     match migration.status {
-        MigrationStatus::Approved => {}
+        MigrationStatus::Approved => {
+            if migration.progress.sync_mode.is_none() {
+                migration.progress.sync_mode = Some("full".to_string());
+            }
+        }
         MigrationStatus::Failed | MigrationStatus::Paused => {
             // Resume: completed batches are skipped below.
+        }
+        MigrationStatus::Completed | MigrationStatus::Verified => {
+            // Delta sync: re-scan the source for new/changed records.
+            // Versioned MERGE makes re-transfer idempotent; only newer
+            // versions overwrite. Batches restart, totals stay cumulative.
+            migration.progress.completed_batches.clear();
+            migration.progress.batches_done = 0;
+            migration.progress.sync_mode = Some("delta".to_string());
+            migration.progress.message =
+                Some("Delta sync: re-scanning source for changes".to_string());
         }
         other => {
             return Err(AppError::BadRequest(format!(
@@ -422,6 +526,16 @@ pub async fn execute_migration_handler(
     let mid_tag = mid.to_string();
     migration.status = MigrationStatus::Running;
     migration.progress.batches_total = plan.total_batches;
+    migration.progress.executed_by = Some(actor.actor.display());
+    crate::routes::audit::audit_event(
+        &state.pool,
+        &actor.actor.display(),
+        "migration.executed",
+        &format!("/api/v1/projects/{}/migrations/{}", id_str, mid),
+        "ok",
+        "",
+    )
+    .await;
     update_migration(&state.pool, &migration).await?;
 
     // 1. Idempotent DDL first.
@@ -443,12 +557,8 @@ pub async fn execute_migration_handler(
                 continue;
             }
             // skip/limit are internally computed integers, never user input.
-            let query = format!(
-                "MATCH (n:{}) RETURN n AS node SKIP {} LIMIT {}",
-                escape_cypher_label(&batch.name),
-                chunk_idx * batch.batch_size,
-                batch.batch_size
-            );
+            let query =
+                build_node_page_query(&batch.name, chunk_idx * batch.batch_size, batch.batch_size);
             let page = state
                 .graph
                 .execute_read(&graph_path, &query, HashMap::new(), None)?;
@@ -458,7 +568,9 @@ pub async fn execute_migration_handler(
                 Ok(outcome) => {
                     migration.progress.nodes_migrated += outcome.nodes_created.max(0) as u64;
                     migration.progress.batches_done += 1;
-                    migration.progress.completed_batches.push(key);
+                    migration.progress.completed_batches.push(key.clone());
+                    migration.progress.high_water_mark = Some(key);
+                    migration.progress.last_sync = Some(Utc::now());
                     if skipped > 0 {
                         migration.progress.message = Some(format!(
                             "Skipped {} node(s) without uid merge keys",
@@ -478,22 +590,26 @@ pub async fn execute_migration_handler(
     }
 
     // 3. Relationship batches (endpoints were migrated in step 2).
+    let mut unstable_edges = 0usize;
     for batch in &plan.rel_batches {
         for chunk_idx in 0..batch.batch_count {
             let key = format!("rels:{}:{}", batch.name, chunk_idx);
             if migration.progress.completed_batches.contains(&key) {
                 continue;
             }
-            let query = format!(
-                "MATCH (s)-[r:{}]->(t) RETURN s.uid AS suid, t.uid AS tuid, r AS rel SKIP {} LIMIT {}",
-                escape_cypher_label(&batch.name),
-                chunk_idx * batch.batch_size,
-                batch.batch_size
-            );
+            let query =
+                build_rel_page_query(&batch.name, chunk_idx * batch.batch_size, batch.batch_size);
             let page = state
                 .graph
                 .execute_read(&graph_path, &query, HashMap::new(), None)?;
             let (rows, _skipped) = rel_rows_from_page(&batch.name, &page.rows);
+            unstable_edges += rows
+                .iter()
+                .filter_map(|r| match r.get("uid") {
+                    Some(BoltValue::String(uid)) if is_hash_fallback_uid(uid) => Some(()),
+                    _ => None,
+                })
+                .count();
             match migrate_relationship_batch_with_options(
                 &backend,
                 &batch.name,
@@ -506,7 +622,9 @@ pub async fn execute_migration_handler(
                     migration.progress.relationships_migrated +=
                         outcome.relationships_created.max(0) as u64;
                     migration.progress.batches_done += 1;
-                    migration.progress.completed_batches.push(key);
+                    migration.progress.completed_batches.push(key.clone());
+                    migration.progress.high_water_mark = Some(key);
+                    migration.progress.last_sync = Some(Utc::now());
                     update_migration(&state.pool, &migration).await?;
                 }
                 Err(e) => {
@@ -520,11 +638,26 @@ pub async fn execute_migration_handler(
     }
 
     migration.status = MigrationStatus::Completed;
+    migration.progress.last_sync = Some(Utc::now());
+    let mode = migration
+        .progress
+        .sync_mode
+        .clone()
+        .unwrap_or_else(|| "full".to_string());
     migration.progress.message = Some(format!(
-        "Migrated {} node(s) and {} relationship(s) in {} batch(es)",
+        "Migrated {} node(s) and {} relationship(s) in {} batch(es) [mode: {}{}]",
         migration.progress.nodes_migrated,
         migration.progress.relationships_migrated,
-        migration.progress.batches_done
+        migration.progress.batches_done,
+        mode,
+        if unstable_edges > 0 {
+            format!(
+                "; {} edge(s) use hash-fallback uids and will duplicate on property change — add a source id or stable key",
+                unstable_edges
+            )
+        } else {
+            String::new()
+        }
     ));
     update_migration(&state.pool, &migration).await?;
     Ok(Json(migration))
@@ -575,10 +708,7 @@ pub async fn verify_migration_handler(
             hash_skipped_labels.push(label.clone());
             continue;
         }
-        let query = format!(
-            "MATCH (n:{}) RETURN n.uid AS uid",
-            escape_cypher_label(label)
-        );
+        let query = build_uid_list_query(label);
         let page = state
             .graph
             .execute_read(&graph_path, &query, HashMap::new(), None)?;
@@ -628,6 +758,7 @@ pub async fn verify_migration_handler(
         label_hashes,
         hash_skipped_labels,
         degrees,
+        allow_target_superset: migration.progress.sync_mode.as_deref() == Some("delta"),
     };
 
     // Sample up to 20 migrated nodes for property comparison.
@@ -767,4 +898,240 @@ pub async fn get_migration_report_handler(
         "created_at": migration.created_at,
         "updated_at": migration.updated_at,
     })))
+}
+
+#[derive(Deserialize, Default)]
+pub struct SyncQuery {
+    #[serde(default)]
+    pub propagate_deletes: bool,
+}
+
+/// Continuous sync: delta re-execute of a completed migration plus optional
+/// explicit delete propagation. Merge-upsert never deletes on its own, so
+/// source deletes only reach the target when `propagate_deletes=true`.
+pub async fn sync_migration_handler(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path((id_str, mid_str)): Path<(String, String)>,
+    Query(query): Query<SyncQuery>,
+) -> Result<Json<Migration>, AppError> {
+    let executed = execute_migration_handler(
+        State(state.clone()),
+        Extension(actor),
+        Path((id_str.clone(), mid_str.clone())),
+    )
+    .await?;
+    if !query.propagate_deletes {
+        return Ok(executed);
+    }
+    let mut migration = executed.0;
+    let project_id = parse_project(&id_str)?;
+    let mid = MigrationId::parse(&mid_str).map_err(|e| {
+        AppError::BadRequest(format!("Invalid Migration UUID '{}': {}", mid_str, e))
+    })?;
+    let conn = get_connection(&state.pool, &migration.project_id, &migration.connection_id)
+        .await
+        .map_err(|_| AppError::NotFound("Migration connection no longer exists".to_string()))?;
+    let backend = build_backend(&conn, None)?;
+    let plan = parse_plan(&migration)?;
+    let graph_path = state.project_graph_path(&project_id);
+    let mid_tag = mid.to_string();
+    let mut deleted_nodes = 0i64;
+    let mut deleted_rels = 0i64;
+    for batch in &plan.node_batches {
+        let query = build_uid_list_query(&batch.name);
+        let page = state
+            .graph
+            .execute_read(&graph_path, &query, HashMap::new(), None)?;
+        let source_uids: Vec<String> = page
+            .rows
+            .iter()
+            .filter_map(|row| row.get("uid").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        let outcome = propagate_node_deletes(&backend, &mid_tag, &batch.name, &source_uids).await?;
+        deleted_nodes += outcome.nodes_deleted;
+    }
+    for batch in &plan.rel_batches {
+        let mut source_uids = Vec::new();
+        for chunk_idx in 0..batch.batch_count {
+            let query =
+                build_rel_page_query(&batch.name, chunk_idx * batch.batch_size, batch.batch_size);
+            let page = state
+                .graph
+                .execute_read(&graph_path, &query, HashMap::new(), None)?;
+            let (rows, _) = rel_rows_from_page(&batch.name, &page.rows);
+            for row in rows {
+                if let Some(BoltValue::String(uid)) = row.get("uid") {
+                    source_uids.push(uid.clone());
+                }
+            }
+        }
+        let outcome = propagate_rel_deletes(&backend, &mid_tag, &batch.name, &source_uids).await?;
+        deleted_rels += outcome.relationships_deleted;
+    }
+    let prior = migration.progress.message.clone().unwrap_or_default();
+    migration.progress.message = Some(format!(
+        "{} | delete propagation removed {} node(s) and {} relationship(s)",
+        prior, deleted_nodes, deleted_rels
+    ));
+    update_migration(&state.pool, &migration).await?;
+    Ok(Json(migration))
+}
+
+/// Scheduled drift detector: runs the same count/hash/degree checks as
+/// verify without changing migration status. Pair with the shadow
+/// `/shadow/runs` endpoint for query-level diffs.
+pub async fn drift_migration_handler(
+    State(state): State<AppState>,
+    Path((id_str, mid_str)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let project_id = parse_project(&id_str)?;
+    let mid = MigrationId::parse(&mid_str).map_err(|e| {
+        AppError::BadRequest(format!("Invalid Migration UUID '{}': {}", mid_str, e))
+    })?;
+    let migration = db_get_migration(&state.pool, &mid)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Migration '{}' not found", mid)))?;
+    match migration.status {
+        MigrationStatus::Completed | MigrationStatus::Verified => {}
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "Drift detection needs a completed migration (current status: {:?})",
+                other
+            )));
+        }
+    }
+    let conn = get_connection(&state.pool, &migration.project_id, &migration.connection_id)
+        .await
+        .map_err(|_| AppError::NotFound("Migration connection no longer exists".to_string()))?;
+    let backend = build_backend(&conn, None)?;
+    let graph_path = state.project_graph_path(&project_id);
+    let label_counts = state
+        .graph
+        .get_label_counts(&graph_path)
+        .unwrap_or_default();
+    let rel_counts = state
+        .graph
+        .get_rel_type_counts(&graph_path)
+        .unwrap_or_default();
+    let mut label_hashes = Vec::new();
+    let mut hash_skipped_labels = Vec::new();
+    for (label, count) in &label_counts {
+        if *count > MAX_HASH_UIDS_PER_LABEL {
+            hash_skipped_labels.push(label.clone());
+            continue;
+        }
+        let query = build_uid_list_query(label);
+        let page = state
+            .graph
+            .execute_read(&graph_path, &query, HashMap::new(), None)?;
+        let uids: Vec<String> = page
+            .rows
+            .iter()
+            .filter_map(|row| row.get("uid").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        label_hashes.push((label.clone(), uid_list_hash(&uids)));
+    }
+    let source = SourceCounts {
+        labels: label_counts,
+        rel_types: rel_counts,
+        label_hashes,
+        hash_skipped_labels,
+        degrees: Vec::new(),
+        allow_target_superset: false,
+    };
+    let report = verify_migration(&backend, &source, &[]).await?;
+    Ok(Json(serde_json::json!({
+        "migration_id": mid.to_string(),
+        "drifted": !report.passed,
+        "checked_at": Utc::now().to_rfc3339(),
+        "report": report,
+    })))
+}
+
+#[derive(Deserialize, Default)]
+pub struct ChangesQuery {
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// CDC change feed: nodes changed since a watermark (RFC 3339 `_updated_at`).
+/// Backs incremental-sync schedulers; `since` omitted returns the oldest page.
+pub async fn changes_handler(
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    Query(query): Query<ChangesQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let project_id = parse_project(&id_str)?;
+    require_project(&state, &project_id).await?;
+    let graph_path = state.project_graph_path(&project_id);
+    let page = state.graph.changes_since(
+        &graph_path,
+        query.since.as_deref(),
+        query.limit.or(Some(100)),
+    )?;
+    Ok(Json(serde_json::json!({
+        "project_id": project_id.to_string(),
+        "since": query.since,
+        "row_count": page.row_count,
+        "rows": page.rows,
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stable_scan_queries_order_deterministically() {
+        let node = build_node_page_query("Person", 10, 5);
+        assert!(node.contains("ORDER BY n.uid"), "{}", node);
+        assert!(node.contains("SKIP 10 LIMIT 5"), "{}", node);
+        let rel = build_rel_page_query("KNOWS", 0, 100);
+        assert!(rel.contains("ORDER BY s.uid, t.uid"), "{}", rel);
+        let uids = build_uid_list_query("Person");
+        assert!(uids.contains("ORDER BY uid"), "{}", uids);
+    }
+
+    #[test]
+    fn test_stamp_version_preserves_source_and_defaults() {
+        let mut props = BTreeMap::new();
+        let source: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        stamp_version(&mut props, &source);
+        assert_eq!(props.get(VERSION_PROPERTY), Some(&BoltValue::Int(1)));
+        assert!(props.contains_key(UPDATED_AT_PROPERTY));
+
+        let mut keep = BTreeMap::new();
+        let mut src = serde_json::Map::new();
+        src.insert(VERSION_PROPERTY.to_string(), serde_json::json!(7));
+        src.insert(
+            UPDATED_AT_PROPERTY.to_string(),
+            serde_json::json!("2026-01-01T00:00:00Z"),
+        );
+        stamp_version(&mut keep, &src);
+        assert_eq!(keep.get(VERSION_PROPERTY), Some(&BoltValue::Int(7)));
+    }
+
+    #[test]
+    fn test_node_rows_stamp_version_and_filter_tag() {
+        let mut inner = serde_json::Map::new();
+        inner.insert("uid".to_string(), serde_json::json!("Person:1"));
+        inner.insert(
+            MIGRATION_TAG_PROPERTY.to_string(),
+            serde_json::json!("forged"),
+        );
+        let mut row = HashMap::new();
+        row.insert("node".to_string(), serde_json::json!({"properties": inner}));
+        let (rows, skipped) = node_rows_from_page(&[row]);
+        assert_eq!(skipped, 0);
+        let props = match rows[0].get("props") {
+            Some(BoltValue::Map(m)) => m,
+            other => panic!("expected props map, got {:?}", other),
+        };
+        assert!(!props.contains_key(MIGRATION_TAG_PROPERTY));
+        assert_eq!(props.get(VERSION_PROPERTY), Some(&BoltValue::Int(1)));
+        assert!(props.contains_key(UPDATED_AT_PROPERTY));
+    }
 }

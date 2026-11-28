@@ -3,7 +3,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use relating_graph::RelateBackend;
 use relating_metadata::init_in_memory_db;
-use relating_server::{create_router, AppState};
+use relating_server::{create_router, AppState, AuthState};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -17,6 +17,7 @@ async fn setup_test_app() -> (axum::Router, tempfile::TempDir) {
         graph: Arc::new(RelateBackend::new()),
         data_dir: dir.path().to_path_buf(),
         api_token: None,
+        auth: AuthState::default(),
     };
     let app = create_router(state);
     (app, dir)
@@ -202,6 +203,7 @@ async fn test_api_token_gates_v1_routes_but_not_health() {
         graph: Arc::new(RelateBackend::new()),
         data_dir: dir.path().to_path_buf(),
         api_token: Some("test-token-123".to_string()),
+        auth: AuthState::default(),
     };
     let app = create_router(state);
 

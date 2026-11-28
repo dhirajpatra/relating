@@ -20,6 +20,12 @@ pub struct SourceCounts {
     /// Per-(label, relationship type) outgoing edge counts from the source.
     #[serde(default)]
     pub degrees: Vec<DegreeExpectation>,
+    /// When true, count checks pass if the target is a superset of the
+    /// source (delta sync without delete propagation leaves tombstoned
+    /// source deletes on the target). Hash checks still require exact
+    /// membership unless the caller skips them.
+    #[serde(default)]
+    pub allow_target_superset: bool,
 }
 
 /// Expected outgoing edge count for one (label, relationship type) pair.
@@ -132,7 +138,11 @@ pub async fn verify_migration(
             escape_identifier(label)
         );
         let target_count = target_count(dest, query).await?;
-        let matched = target_count == *source_count;
+        let matched = if source.allow_target_superset {
+            target_count >= *source_count
+        } else {
+            target_count == *source_count
+        };
         if !matched {
             details.push(format!(
                 "Label '{}': source has {} nodes but target has {}",
@@ -154,7 +164,11 @@ pub async fn verify_migration(
             escape_identifier(rel_type)
         );
         let target_count = target_count(dest, query).await?;
-        let matched = target_count == *source_count;
+        let matched = if source.allow_target_superset {
+            target_count >= *source_count
+        } else {
+            target_count == *source_count
+        };
         if !matched {
             details.push(format!(
                 "Relationship '{}': source has {} but target has {}",
@@ -279,6 +293,7 @@ mod tests {
             label_hashes: Vec::new(),
             hash_skipped_labels: Vec::new(),
             degrees: Vec::new(),
+            allow_target_superset: false,
         }
     }
 
@@ -339,6 +354,7 @@ mod tests {
             )],
             hash_skipped_labels: Vec::new(),
             degrees: Vec::new(),
+            allow_target_superset: false,
         };
         let report = verify_migration(&dest, &source, &[]).await.unwrap();
         assert!(report.checks[0].matched);
@@ -397,6 +413,7 @@ mod tests {
                 rel_type: "KNOWS".to_string(),
                 out_count: 1,
             }],
+            allow_target_superset: false,
         };
         let samples = vec![SampleExpectation {
             label: "Person".to_string(),

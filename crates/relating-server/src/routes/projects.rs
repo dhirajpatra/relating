@@ -2,9 +2,12 @@ use crate::error::AppError;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use chrono::Utc;
-use relating_core::{AiProviderConfig, CreateProjectRequest, Project, ProjectId, ProjectSummary};
+use relating_core::{
+    Actor, ActorContext, AiProviderConfig, CreateProjectRequest, Project, ProjectId,
+    ProjectSummary, Role,
+};
 use relating_graph::{GraphBackend, GraphSchemaInfo};
 use relating_metadata::{
     delete_project as db_delete, get_project as db_get, insert_project, list_projects as db_list,
@@ -19,6 +22,7 @@ pub struct ProjectDetailResponse {
 
 pub async fn create_project_handler(
     State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
     Json(payload): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<Project>), AppError> {
     let name = payload.name.trim();
@@ -32,7 +36,7 @@ pub async fn create_project_handler(
     let now = Utc::now();
     let ai_config = payload.ai_config.unwrap_or_else(AiProviderConfig::mock);
 
-    let project = Project {
+    let mut project = Project {
         id: project_id.clone(),
         name: name.to_string(),
         description: payload.description.unwrap_or_default(),
@@ -44,10 +48,25 @@ pub async fn create_project_handler(
     // 1. Insert into SQLite metadata
     insert_project(&state.pool, &project).await?;
 
-    // 2. Ensure project-scoped graph store exists on disk
+    // 2. OIDC creators become admins of their own project, so the grant
+    // that let them create (global editor) is not needed for every visit.
+    if let Actor::User { id, .. } = &actor.actor {
+        relating_metadata::create_grant(
+            &state.pool,
+            id,
+            Some(&project.id.to_string()),
+            Role::Admin,
+            &actor.actor.display(),
+        )
+        .await?;
+    }
+
+    // 3. Ensure project-scoped graph store exists on disk
     let graph_path = state.project_graph_path(&project.id);
     state.graph.ensure_store(&graph_path)?;
 
+    // Provider keys are write-only: accepted on create, never returned.
+    project.ai_config = project.ai_config.redacted();
     Ok((StatusCode::CREATED, Json(project)))
 }
 
@@ -83,9 +102,10 @@ pub async fn get_project_handler(
     let id = ProjectId::parse(&id_str)
         .map_err(|e| AppError::BadRequest(format!("Invalid UUID '{}': {}", id_str, e)))?;
 
-    let project = db_get(&state.pool, &id)
+    let mut project = db_get(&state.pool, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project with ID '{}' not found", id)))?;
+    project.ai_config = project.ai_config.redacted();
 
     let graph_path = state.project_graph_path(&id);
     let schema = state.graph.get_schema(&graph_path).unwrap_or_default();

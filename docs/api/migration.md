@@ -55,12 +55,16 @@ is not; the script stays as the thin Docker wrapper.
    `remote_writes: 0`.
 4. `POST .../{mid}/approve` — `{approved: true|false}`. Refuses approval while
    dry-run blockers exist. No remote write happens before this step.
-5. `POST .../{mid}/execute` — requires `approved` (or resumes `failed`/`paused`).
-   Runs idempotent DDL, then `UNWIND`+`MERGE` batches on stable `uid` keys,
-   persisting progress after every batch. Endpoints are matched, never
-   fabricated; nodes without `uid` are counted and skipped; relationships
-   carry their own stable `uid` so parallel edges never collapse. Created
-   records are stamped with the migration id for rollback.
+5. `POST .../{mid}/execute` — requires `approved` (or resumes `failed`/`paused`,
+   or delta-resyncs `completed`/`verified`). Runs idempotent DDL, then
+   versioned `UNWIND`+`MERGE` batches on stable `uid` keys, persisting
+   progress plus a high-water mark after every batch. Endpoints are matched,
+   never fabricated; nodes without `uid` are counted and skipped;
+   relationships carry their own stable `uid` (source id > stable business
+   key > legacy content hash) so keyed parallel edges never collapse.
+   Created records are stamped with the migration id for rollback; every
+   record carries `_version`/`_updated_at` and matched rows only overwrite
+   when the incoming version is newer.
 6. `POST .../{mid}/verify` — per-label/type counts, per-label content
    hashes, relationship-degree comparison, and property sampling (subset
    semantics); sets `verified` only when everything matches.
@@ -70,6 +74,29 @@ is not; the script stays as the thin Docker wrapper.
    pre-existing records are not reverted — snapshot the Aura instance
    first when the tier supports it.
 8. `GET .../migrations`, `GET .../{mid}`, `GET .../{mid}/report` (manifest).
+
+## Continuous sync (CDC)
+
+- `POST .../{mid}/sync[?propagate_deletes=true]` — delta re-execute of a
+  finished migration: re-scans the source with stable `ORDER BY` paging and
+  transfers only new/changed records (versioned `MERGE` overwrites only on
+  newer `_version`). `progress.sync_mode` is `full` for initial loads and
+  `delta` for resyncs; `high_water_mark`/`last_sync` track the last batch.
+  Merge-upsert never deletes, so source deletes reach the target only with
+  `propagate_deletes=true`, which removes tagged records missing from the
+  source (untagged target-native data is never touched).
+- `POST .../{mid}/drift` — scheduled drift detector: count + content-hash
+  checks without changing migration status (`{drifted, checked_at, report}`).
+  Pair with `/shadow/runs` for query-level diffs.
+- `GET /projects/{id}/changes?since=<rfc3339>&limit=<n>` — CDC change feed
+  over `_updated_at` (missing timestamps count as changed so legacy data
+  still syncs). Backs external schedulers.
+- Relationship uids prefer source record ids, then stable business keys
+  (`uid`, `relationship_uid`, `edge_uid`, `id`, `_uid`, `key`, `uuid`),
+  then the legacy content hash. Hash-fallback edges (`#hash:`) are not
+  update-stable — a property change re-hashes to a new uid — and execute
+  reports how many were written. There is no target-to-source (Aura →
+  local) sync in this release.
 
 ## Write mode (disclosed, not implied)
 

@@ -32,6 +32,25 @@ pub trait GraphBackend: Send + Sync {
         store_path: &Path,
         limit: Option<u32>,
     ) -> Result<CytoscapeGraph, GraphError>;
+
+    /// Incremental CDC scan: nodes whose `_updated_at` is newer than the
+    /// watermark (RFC 3339), ordered for stable paging. `None` watermark
+    /// returns the oldest page first. Records without `_updated_at` are
+    /// treated as changed so legacy data still syncs.
+    fn changes_since(
+        &self,
+        store_path: &Path,
+        watermark: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<GraphQueryResult, GraphError> {
+        let _ = (store_path, watermark, limit);
+        Ok(GraphQueryResult {
+            columns: vec!["node".to_string()],
+            rows: Vec::new(),
+            elapsed_ms: 0.0,
+            row_count: 0,
+        })
+    }
 }
 
 #[derive(Clone, Default)]
@@ -380,6 +399,35 @@ impl GraphBackend for RelateBackend {
         Ok(CytoscapeGraph {
             elements: CytoscapeElements { nodes, edges },
         })
+    }
+
+    fn changes_since(
+        &self,
+        store_path: &Path,
+        watermark: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<GraphQueryResult, GraphError> {
+        let page_size = limit.unwrap_or(500);
+        let mut params = HashMap::new();
+        if let Some(wm) = watermark {
+            params.insert(
+                "watermark".to_string(),
+                serde_json::Value::String(wm.to_string()),
+            );
+        }
+        // RFC 3339 timestamps sort lexicographically, so string comparison
+        // is a correct recency filter. Missing _updated_at counts as changed.
+        let cypher = match watermark {
+            Some(_) => format!(
+                "MATCH (n) WHERE n._updated_at IS NULL OR n._updated_at > $watermark RETURN n AS node ORDER BY n._updated_at, n.uid LIMIT {}",
+                page_size
+            ),
+            None => format!(
+                "MATCH (n) RETURN n AS node ORDER BY n._updated_at, n.uid LIMIT {}",
+                page_size
+            ),
+        };
+        self.execute_read(store_path, &cypher, params, None)
     }
 }
 

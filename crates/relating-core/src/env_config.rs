@@ -142,9 +142,7 @@ pub fn aura_env_status() -> AuraEnvStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::ENV_LOCK;
 
     struct EnvGuard {
         saved: Vec<(String, Option<String>)>,

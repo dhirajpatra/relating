@@ -34,6 +34,47 @@ pub const MIGRATION_TAG_PROPERTY: &str = "_relating_migration_id";
 /// Query parameter carrying the migration id for ON CREATE tagging.
 const MID_PARAM: &str = "mid";
 
+/// Optimistic-concurrency version stamped on every migrated record.
+/// Sources may carry their own `_version`; otherwise the server injects `1`.
+pub const VERSION_PROPERTY: &str = "_version";
+/// Last-write timestamp (RFC 3339) stamped alongside the version.
+pub const UPDATED_AT_PROPERTY: &str = "_updated_at";
+
+/// Stable business keys recognized inside relationship properties for CDC.
+/// When the source exposes no record id, one of these keeps the edge uid
+/// stable across property updates (unlike the legacy content hash).
+const STABLE_REL_KEYS: &[&str] = &[
+    "uid",
+    "relationship_uid",
+    "edge_uid",
+    "id",
+    "_uid",
+    "key",
+    "uuid",
+];
+
+fn stable_key_from_props(props_json: &serde_json::Value) -> Option<String> {
+    let map = props_json.as_object()?;
+    for key in STABLE_REL_KEYS {
+        if let Some(v) = map.get(*key).and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+        // Numeric stable keys (e.g. source PKs) stringify deterministically.
+        if let Some(v) = map.get(*key).and_then(|v| v.as_i64()) {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+/// True when a relationship uid came from the legacy content-hash fallback
+/// (not update-stable: property changes re-hash to a new uid).
+pub fn is_hash_fallback_uid(uid: &str) -> bool {
+    uid.contains("#hash:")
+}
+
 fn counter(meta: &BTreeMap<String, BoltValue>, key: &str) -> i64 {
     match meta.get("stats") {
         Some(BoltValue::Map(stats)) => stats.get(key).and_then(|v| v.as_int()).unwrap_or(0),
@@ -62,12 +103,14 @@ fn rows_param_with_mid(
     params
 }
 
-/// Stable relationship key: the source record id when the source exposes one
-/// (updates re-migrate in place on delta pushes), otherwise a content hash
-/// (distinct parallel edges between the same endpoints stay distinct).
+/// Stable relationship key with CDC-safe precedence:
+/// 1. source record id (`rel:<n>`) — update-stable,
+/// 2. stable business key inside properties (`key:<v>`) — update-stable,
+/// 3. legacy content hash (`hash:<hex>`) — NOT update-stable (property
+///    changes re-hash to a new uid, creating a duplicate on delta sync).
 ///
-/// The `rel:<n>` / `hash:<hex>` prefix keeps the two provenances visibly
-/// apart in the target data.
+/// The prefix keeps the three provenances visibly apart in target data.
+/// Prefer (1) or (2) for any edge that must survive incremental sync.
 pub fn relationship_uid(
     rel_type: &str,
     suid: &str,
@@ -75,22 +118,23 @@ pub fn relationship_uid(
     source_rel_id: Option<&str>,
     props_json: &serde_json::Value,
 ) -> String {
-    match source_rel_id.filter(|id| !id.is_empty()) {
-        Some(id) => format!("{}:{}->{}#rel:{}", rel_type, suid, tuid, id),
-        None => {
-            let mut hasher = Sha256::new();
-            hasher.update(rel_type.as_bytes());
-            hasher.update([0]);
-            hasher.update(suid.as_bytes());
-            hasher.update([0]);
-            hasher.update(tuid.as_bytes());
-            hasher.update([0]);
-            hasher.update(props_json.to_string().as_bytes());
-            let digest = hasher.finalize();
-            let hex: String = digest[..8].iter().map(|b| format!("{:02x}", b)).collect();
-            format!("{}:{}->{}#hash:{}", rel_type, suid, tuid, hex)
-        }
+    if let Some(id) = source_rel_id.filter(|id| !id.is_empty()) {
+        return format!("{}:{}->{}#rel:{}", rel_type, suid, tuid, id);
     }
+    if let Some(key) = stable_key_from_props(props_json) {
+        return format!("{}:{}->{}#key:{}", rel_type, suid, tuid, key);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(rel_type.as_bytes());
+    hasher.update([0]);
+    hasher.update(suid.as_bytes());
+    hasher.update([0]);
+    hasher.update(tuid.as_bytes());
+    hasher.update([0]);
+    hasher.update(props_json.to_string().as_bytes());
+    let digest = hasher.finalize();
+    let hex: String = digest[..8].iter().map(|b| format!("{:02x}", b)).collect();
+    format!("{}:{}->{}#hash:{}", rel_type, suid, tuid, hex)
 }
 
 /// Idempotent node batch: MERGE on the stable uid, then set properties.
@@ -122,18 +166,24 @@ pub async fn migrate_node_batch_with_options(
             elapsed_ms: 0.0,
         });
     }
-    let tag_clause = match migration_id {
+    let version_guard = format!(
+        "coalesce(row.props.{}, 1) > coalesce(n.{}, 0)",
+        escape_identifier(VERSION_PROPERTY),
+        escape_identifier(VERSION_PROPERTY)
+    );
+    let create_tag = match migration_id {
         Some(_) => format!(
-            " ON CREATE SET n.{} = ${}",
+            ", n.{} = ${}",
             escape_identifier(MIGRATION_TAG_PROPERTY),
             MID_PARAM
         ),
         None => String::new(),
     };
     let query = format!(
-        "UNWIND $batch AS row MERGE (n:{} {{uid: row.uid}}){} SET n += row.props",
+        "UNWIND $batch AS row MERGE (n:{} {{uid: row.uid}}) ON CREATE SET n += row.props{} ON MATCH SET n += CASE WHEN {} THEN row.props ELSE {{}} END",
         escape_identifier(label),
-        tag_clause,
+        create_tag,
+        version_guard,
     );
     let params = match migration_id {
         Some(mid) => rows_param_with_mid(rows, mid),
@@ -193,18 +243,24 @@ pub async fn migrate_relationship_batch_with_options(
             }
         }
     }
-    let tag_clause = match migration_id {
+    let version_guard = format!(
+        "coalesce(row.props.{}, 1) > coalesce(r.{}, 0)",
+        escape_identifier(VERSION_PROPERTY),
+        escape_identifier(VERSION_PROPERTY)
+    );
+    let create_tag = match migration_id {
         Some(_) => format!(
-            " ON CREATE SET r.{} = ${}",
+            ", r.{} = ${}",
             escape_identifier(MIGRATION_TAG_PROPERTY),
             MID_PARAM
         ),
         None => String::new(),
     };
     let query = format!(
-        "UNWIND $batch AS row MATCH (s {{uid: row.suid}}), (t {{uid: row.tuid}}) MERGE (s)-[r:{} {{uid: row.uid}}]->(t){} SET r += row.props",
+        "UNWIND $batch AS row MATCH (s {{uid: row.suid}}), (t {{uid: row.tuid}}) MERGE (s)-[r:{} {{uid: row.uid}}]->(t) ON CREATE SET r += row.props{} ON MATCH SET r += CASE WHEN {} THEN row.props ELSE {{}} END",
         escape_identifier(rel_type),
-        tag_clause,
+        create_tag,
+        version_guard,
     );
     let params = match migration_id {
         Some(mid) => rows_param_with_mid(rows, mid),
@@ -254,6 +310,167 @@ pub async fn rollback_migration(
         migration_id: migration_id.to_string(),
         nodes_deleted,
         relationships_deleted,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletePropagationOutcome {
+    pub migration_id: String,
+    pub label_or_type: String,
+    pub nodes_deleted: i64,
+    pub relationships_deleted: i64,
+    pub missing_uids: Vec<String>,
+}
+
+/// Explicit delete propagation for CDC: remove tagged target records whose
+/// uids no longer exist in the source. Merge-upsert never deletes, so delta
+/// syncs call this only when the caller opts in (`propagate_deletes=true`).
+/// Only records stamped with this migration id are eligible; untagged
+/// target-native data is never touched.
+pub async fn propagate_node_deletes(
+    dest: &dyn Neo4jBackend,
+    migration_id: &str,
+    label: &str,
+    source_uids: &[String],
+) -> Result<DeletePropagationOutcome, MigrateError> {
+    if migration_id.trim().is_empty() {
+        return Err(MigrateError::Plan(
+            "Cannot propagate deletes: migration id is empty".to_string(),
+        ));
+    }
+    use std::collections::HashSet;
+    let source: HashSet<&str> = source_uids.iter().map(|s| s.as_str()).collect();
+    let tag = escape_identifier(MIGRATION_TAG_PROPERTY);
+    let list_query = format!(
+        "MATCH (n:{} {{{}: $mid}}) RETURN n.uid AS uid",
+        escape_identifier(label),
+        tag
+    );
+    let mut list_params = BTreeMap::new();
+    list_params.insert(
+        "mid".to_string(),
+        BoltValue::String(migration_id.to_string()),
+    );
+    let rows = dest.run_read(&list_query, list_params).await?;
+    let mut missing = Vec::new();
+    for row in rows {
+        if let Some(uid) = row.first().and_then(|v| v.as_str()) {
+            if !source.contains(uid) {
+                missing.push(uid.to_string());
+            }
+        }
+    }
+    missing.sort();
+    if missing.is_empty() {
+        return Ok(DeletePropagationOutcome {
+            migration_id: migration_id.to_string(),
+            label_or_type: label.to_string(),
+            nodes_deleted: 0,
+            relationships_deleted: 0,
+            missing_uids: Vec::new(),
+        });
+    }
+    let delete_query = format!(
+        "UNWIND $missing AS uid MATCH (n:{} {{{}: $mid, uid: uid}}) DETACH DELETE n",
+        escape_identifier(label),
+        tag
+    );
+    let mut del_params = BTreeMap::new();
+    del_params.insert(
+        "mid".to_string(),
+        BoltValue::String(migration_id.to_string()),
+    );
+    del_params.insert(
+        "missing".to_string(),
+        BoltValue::List(
+            missing
+                .iter()
+                .map(|u| BoltValue::String(u.clone()))
+                .collect(),
+        ),
+    );
+    let meta = dest.run_write(&delete_query, del_params).await?;
+    let nodes_deleted = counter(&meta, "nodes-deleted");
+    Ok(DeletePropagationOutcome {
+        migration_id: migration_id.to_string(),
+        label_or_type: label.to_string(),
+        nodes_deleted,
+        relationships_deleted: 0,
+        missing_uids: missing,
+    })
+}
+
+/// Relationship counterpart to [`propagate_node_deletes`].
+pub async fn propagate_rel_deletes(
+    dest: &dyn Neo4jBackend,
+    migration_id: &str,
+    rel_type: &str,
+    source_uids: &[String],
+) -> Result<DeletePropagationOutcome, MigrateError> {
+    if migration_id.trim().is_empty() {
+        return Err(MigrateError::Plan(
+            "Cannot propagate deletes: migration id is empty".to_string(),
+        ));
+    }
+    use std::collections::HashSet;
+    let source: HashSet<&str> = source_uids.iter().map(|s| s.as_str()).collect();
+    let tag = escape_identifier(MIGRATION_TAG_PROPERTY);
+    let list_query = format!(
+        "MATCH ()-[r:{} {{{}: $mid}}]->() RETURN r.uid AS uid",
+        escape_identifier(rel_type),
+        tag
+    );
+    let mut list_params = BTreeMap::new();
+    list_params.insert(
+        "mid".to_string(),
+        BoltValue::String(migration_id.to_string()),
+    );
+    let rows = dest.run_read(&list_query, list_params).await?;
+    let mut missing = Vec::new();
+    for row in rows {
+        if let Some(uid) = row.first().and_then(|v| v.as_str()) {
+            if !source.contains(uid) {
+                missing.push(uid.to_string());
+            }
+        }
+    }
+    missing.sort();
+    if missing.is_empty() {
+        return Ok(DeletePropagationOutcome {
+            migration_id: migration_id.to_string(),
+            label_or_type: rel_type.to_string(),
+            nodes_deleted: 0,
+            relationships_deleted: 0,
+            missing_uids: Vec::new(),
+        });
+    }
+    let delete_query = format!(
+        "UNWIND $missing AS uid MATCH ()-[r:{} {{{}: $mid, uid: uid}}]->() DELETE r",
+        escape_identifier(rel_type),
+        tag
+    );
+    let mut del_params = BTreeMap::new();
+    del_params.insert(
+        "mid".to_string(),
+        BoltValue::String(migration_id.to_string()),
+    );
+    del_params.insert(
+        "missing".to_string(),
+        BoltValue::List(
+            missing
+                .iter()
+                .map(|u| BoltValue::String(u.clone()))
+                .collect(),
+        ),
+    );
+    let meta = dest.run_write(&delete_query, del_params).await?;
+    let relationships_deleted = counter(&meta, "relationships-deleted");
+    Ok(DeletePropagationOutcome {
+        migration_id: migration_id.to_string(),
+        label_or_type: rel_type.to_string(),
+        nodes_deleted: 0,
+        relationships_deleted,
+        missing_uids: missing,
     })
 }
 
@@ -373,6 +590,45 @@ mod tests {
         // Different properties hash differently: parallel edges stay distinct.
         let other = relationship_uid("KNOWS", "A", "B", None, &serde_json::json!({"since": 2021}));
         assert_ne!(hashed, other);
+    }
+
+    #[test]
+    fn test_relationship_uid_prefers_stable_business_key_and_updates_in_place() {
+        let before = serde_json::json!({"edge_uid": "e-1", "since": 2020});
+        let after = serde_json::json!({"edge_uid": "e-1", "since": 2021});
+        let first = relationship_uid("KNOWS", "A", "B", None, &before);
+        let second = relationship_uid("KNOWS", "A", "B", None, &after);
+        assert_eq!(first, second);
+        assert_eq!(first, "KNOWS:A->B#key:e-1");
+        assert!(!is_hash_fallback_uid(&first));
+
+        let hashed = relationship_uid("KNOWS", "A", "B", None, &serde_json::json!({"since": 1}));
+        assert!(is_hash_fallback_uid(&hashed));
+    }
+
+    #[tokio::test]
+    async fn test_node_batch_uses_versioned_compare_and_set() {
+        let dest = MockNeo4jBackend::new();
+        migrate_node_batch(&dest, "Person", vec![node_row("Person:1", "Ada")])
+            .await
+            .unwrap();
+        let query = dest.last_write_query().await.unwrap();
+        assert!(query.contains("ON CREATE SET"), "{}", query);
+        assert!(query.contains("ON MATCH SET"), "{}", query);
+        assert!(query.contains("CASE WHEN"), "{}", query);
+        assert!(query.contains("_version"), "{}", query);
+    }
+
+    #[tokio::test]
+    async fn test_relationship_batch_uses_versioned_compare_and_set() {
+        let dest = MockNeo4jBackend::new();
+        migrate_relationship_batch(&dest, "KNOWS", vec![rel_row("K:A->B#rel:1", "A", "B")])
+            .await
+            .unwrap();
+        let query = dest.last_write_query().await.unwrap();
+        assert!(query.contains("ON CREATE SET"), "{}", query);
+        assert!(query.contains("ON MATCH SET"), "{}", query);
+        assert!(query.contains("_version"), "{}", query);
     }
 
     #[tokio::test]

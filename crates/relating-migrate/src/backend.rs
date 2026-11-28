@@ -315,6 +315,15 @@ impl MockNeo4jBackend {
         self.state.lock().await.writes.len()
     }
 
+    pub async fn last_write_query(&self) -> Option<String> {
+        self.state
+            .lock()
+            .await
+            .writes
+            .last()
+            .map(|(q, _)| q.clone())
+    }
+
     pub async fn node_uids(&self, label: &str) -> Vec<String> {
         let state = self.state.lock().await;
         state
@@ -463,6 +472,22 @@ impl Neo4jBackend for MockNeo4jBackend {
             }
             return Ok(Vec::new());
         }
+        // Relationship uid listing for delete propagation.
+        if query.contains("RETURN r.uid") {
+            if let Some(rel_type) = extract_rel_type(query).or_else(|| extract_label(query)) {
+                let mut uids: Vec<String> = state
+                    .rel_uids
+                    .get(&rel_type)
+                    .map(|s| s.iter().cloned().collect())
+                    .unwrap_or_default();
+                uids.sort();
+                return Ok(uids
+                    .into_iter()
+                    .map(|uid| vec![BoltValue::String(uid)])
+                    .collect());
+            }
+            return Ok(Vec::new());
+        }
         // Answer count queries from recorded MERGE batches.
         if query.to_lowercase().contains("count(") {
             if query.contains("-[") {
@@ -500,14 +525,24 @@ impl Neo4jBackend for MockNeo4jBackend {
 
         let mut stats = BTreeMap::new();
         // Rollback deletes: remove records carrying the migration tag.
+        // Propagate deletes carry $missing and remove only those uids.
         if query.contains("DELETE") {
             let mid = params.get("mid").and_then(|v| v.as_str()).unwrap_or("");
+            let missing: Option<std::collections::HashSet<String>> = match params.get("missing") {
+                Some(BoltValue::List(uids)) => Some(
+                    uids.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect(),
+                ),
+                _ => None,
+            };
             if query.contains("DETACH DELETE") {
                 let tagged: Vec<(String, String)> = state
                     .node_tags
                     .iter()
                     .filter(|(_, tag)| tag.as_str() == mid)
                     .map(|(key, _)| key.clone())
+                    .filter(|(_, uid)| missing.as_ref().map(|m| m.contains(uid)).unwrap_or(true))
                     .collect();
                 let deleted = tagged.len() as i64;
                 for (label, uid) in tagged {
@@ -524,6 +559,7 @@ impl Neo4jBackend for MockNeo4jBackend {
                     .iter()
                     .filter(|(_, tag)| tag.as_str() == mid)
                     .map(|(key, _)| key.clone())
+                    .filter(|(_, uid)| missing.as_ref().map(|m| m.contains(uid)).unwrap_or(true))
                     .collect();
                 let deleted = tagged.len() as i64;
                 for (rel_type, uid) in tagged {
