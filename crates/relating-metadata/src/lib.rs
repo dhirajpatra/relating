@@ -1,5 +1,6 @@
 pub mod audit_repo;
 pub mod connection_repo;
+pub mod connector_repo;
 pub mod db;
 pub mod embedding_repo;
 pub mod evaluation_repo;
@@ -15,6 +16,7 @@ pub mod source_repo;
 
 pub use audit_repo::*;
 pub use connection_repo::*;
+pub use connector_repo::*;
 pub use db::{db_url_kind, init_db, init_in_memory_db, DbPool};
 pub use embedding_repo::*;
 pub use evaluation_repo::*;

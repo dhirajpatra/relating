@@ -1,6 +1,6 @@
 # AGENTS.md — Contributor and Coding-Agent Conventions
 
-Relating is a Rust workspace (16 crates) + React workbench for graph
+Relating is a Rust workspace (17 crates) + React workbench for graph
 development, GraphRAG, and Relate→Neo4j Aura migration. `README.md` is the
 product doc, `SKILL.md` is the implementation contract — this file is the
 day-to-day contributor cheat sheet: exact commands, layout, and gotchas.
@@ -14,6 +14,8 @@ cargo test --workspace --locked                             # full suite
 cargo test -p relating-migrate                              # one crate
 cargo test -p relating-server --test migration_integration_tests test_rollback  # one test
 cd web && npm ci --no-audit --no-fund && npm run build     # workbench UI
+cd sdks/python && PYTHONPATH=src python3 -m unittest discover -s tests  # python SDK
+cd sdks/typescript && npm test                          # TS SDK (workbench tsc)
 ```
 
 Run and migrate:
@@ -47,6 +49,8 @@ cargo run -p relating-cli -- portability scan --dir . --emit sarif --out portabi
 | `crates/relating-debug/` | GraphRAG traces + diagnosis |
 | `crates/relating-synth/` | Synthetic fixture generation |
 | `crates/relating-advisor/` | Perf/cost rules, sizing, measurements |
+| `crates/relating-connectors/` | SQL (sqlite/postgres/mysql) + REST sources, mapping, test stub |
+| `sdks/python/` · `sdks/typescript/` | Zero-dep API clients; target flip + typed errors |
 | `web/` | React + TypeScript workbench (12 tabs), served from `web/dist` when built |
 | `tests/fixtures/` | Deterministic seed fixtures (`aura-fill-ontology.json`) |
 | `docs/api/` | Per-area API contracts — update with every endpoint change |

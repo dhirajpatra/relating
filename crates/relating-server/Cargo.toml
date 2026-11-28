@@ -24,6 +24,7 @@ relating-shadow = { workspace = true }
 relating-debug = { workspace = true }
 relating-synth = { workspace = true }
 relating-advisor = { workspace = true }
+relating-connectors = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { version = "0.5", features = ["util"] }

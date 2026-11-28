@@ -56,6 +56,9 @@ pub enum AppError {
     #[error("Advisor error: {0}")]
     Advisor(#[from] relating_advisor::AdvisorError),
 
+    #[error("Connector error: {0}")]
+    Connectors(#[from] relating_connectors::ConnectorError),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -119,6 +122,19 @@ impl IntoResponse for AppError {
             AppError::Debug(err) => (StatusCode::BAD_REQUEST, "DEBUG_ERROR", err.to_string()),
             AppError::Synth(err) => (StatusCode::BAD_REQUEST, "SYNTH_ERROR", err.to_string()),
             AppError::Advisor(err) => (StatusCode::BAD_REQUEST, "ADVISOR_ERROR", err.to_string()),
+            AppError::Connectors(
+                relating_connectors::ConnectorError::Config(_)
+                | relating_connectors::ConnectorError::Mapping(_),
+            ) => (
+                StatusCode::BAD_REQUEST,
+                "CONNECTOR_CONFIG",
+                self.to_string(),
+            ),
+            AppError::Connectors(err) => (
+                StatusCode::BAD_GATEWAY,
+                "CONNECTOR_UPSTREAM",
+                err.to_string(),
+            ),
             other => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

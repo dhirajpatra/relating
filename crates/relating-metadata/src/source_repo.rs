@@ -164,3 +164,39 @@ pub async fn delete_source(pool: &SqlitePool, id: &SourceId) -> Result<bool, Rel
 
     Ok(result.rows_affected() > 0)
 }
+
+/// Refresh a source after (re)ingestion: new content hash, status, and
+/// metadata (callers merge keys such as `last_ingested_hash` first).
+pub async fn update_source(pool: &SqlitePool, source: &Source) -> Result<(), RelatingError> {
+    let status_str = match source.status {
+        SourceStatus::Pending => "pending",
+        SourceStatus::Processed => "processed",
+        SourceStatus::Failed => "failed",
+    };
+    let metadata_json = serde_json::to_string(&source.metadata).map_err(|e| {
+        RelatingError::Internal(format!("Failed to serialize source metadata: {}", e))
+    })?;
+    sqlx::query(
+        "UPDATE sources SET content_hash = ?, byte_size = ?, status = ?, metadata = ? WHERE id = ?",
+    )
+    .bind(&source.content_hash)
+    .bind(source.byte_size as i64)
+    .bind(status_str)
+    .bind(metadata_json)
+    .bind(source.id.to_string())
+    .execute(pool)
+    .await
+    .map_err(|e| RelatingError::Database(format!("Failed to update source: {}", e)))?;
+    Ok(())
+}
+
+/// Find a project source by exact filename. Managed connector sources live
+/// under `connector://<name>` and refresh in place on every sync.
+pub async fn find_source_by_filename(
+    pool: &SqlitePool,
+    project_id: &ProjectId,
+    filename: &str,
+) -> Result<Option<Source>, RelatingError> {
+    let sources = list_sources(pool, project_id).await?;
+    Ok(sources.into_iter().find(|s| s.filename == filename))
+}

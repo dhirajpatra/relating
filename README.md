@@ -17,7 +17,7 @@ Relating is a local-first, AI-native graph development and GraphRAG workbench. I
 
 ## Use case
 
-Relating is a local-first, AI-native graph development and GraphRAG workbench: create isolated projects, ingest CSV/JSON/text/PDF/DOCX, propose and approve an ontology with AI, extract entities and relationships, explore with Cypher, build hybrid retrieval and grounded Q&A, connect agents over MCP, and migrate approved data to Neo4j Aura. The relationships that matter are each project's own domain entities and their connections (people, documents, products, papers, or whatever the project ontology defines), plus provenance links from every node/relationship back to its source chunk and file.
+Relating is a local-first, AI-native graph development and GraphRAG workbench: create isolated projects, ingest CSV/JSON/text/PDF/DOCX plus SQL databases and REST APIs, propose and approve an ontology with AI, extract entities and relationships, explore with Cypher, build hybrid retrieval and grounded Q&A, connect agents over MCP, and migrate approved data to Neo4j Aura with continuous delta sync. Teams get OIDC single sign-on, role-based access, and hash-chained audit logs; applications integrate through the Python and TypeScript SDKs. The relationships that matter are each project's own domain entities and their connections (people, documents, products, papers, or whatever the project ontology defines), plus provenance links from every node/relationship back to its source chunk and file.
 
 ## How it uses Relate
 
@@ -63,16 +63,21 @@ Headless workflows use the CLI instead: `cargo run -p relating-cli -- validate -
 (validations, contract tests, schema export/diff, eval gates, shadow runs, debugging —
 see [docs/api/ci.md](docs/api/ci.md)).
 
-**Status: milestones A–E and releases R1–R6 are implemented** — projects, ingestion,
-ontology, graph explorer, Cypher, embeddings, retrieval, grounded Q&A, evaluation,
-MCP agent server (read-only tools), Aura migration over Bolt, schema-as-code,
-portability compiler, CI/CD gates, shadow testing, graph debugger, synthetic
-data, and the performance advisor. Also implemented: Relate↔Aura backend flip
-without query rewrites ([backend_flip.md](docs/api/backend_flip.md)), Aura
-vector-index and tier-capacity fit checks, PDF/DOCX ingestion, merge-upsert
-migration disclosure, migration rollback, count/hash/degree verification,
-SARIF portability output, an API bearer-token gate, and team secrets plus
-PostgreSQL provisioning ([postgres.md](docs/postgres.md), [secrets.md](docs/secrets.md)).
+**Status: milestones A–E, releases R1–R6, and enterprise E1–E3 are implemented** —
+projects, ingestion, ontology, graph explorer, Cypher, embeddings, retrieval,
+grounded Q&A, evaluation, MCP agent server (read-only tools), Aura migration
+over Bolt, schema-as-code, portability compiler, CI/CD gates, shadow testing,
+graph debugger, synthetic data, and the performance advisor. Also implemented:
+Relate↔Aura backend flip without query rewrites ([backend_flip.md](docs/api/backend_flip.md)),
+Aura vector-index and tier-capacity fit checks, PDF/DOCX ingestion,
+merge-upsert migration disclosure, migration rollback, count/hash/degree
+verification, SARIF portability output, an API bearer-token gate, and team
+secrets plus PostgreSQL provisioning ([postgres.md](docs/postgres.md),
+[secrets.md](docs/secrets.md)). Enterprise additions: continuous delta sync
+with versioned conflict handling and drift detection ([migration.md](docs/api/migration.md)),
+OIDC single sign-on with RBAC and hash-chained audit export ([auth.md](docs/api/auth.md)),
+SQL + REST data connectors with incremental ingest ([connectors.md](docs/api/connectors.md)),
+and zero-dependency Python/TypeScript SDKs (`sdks/python`, `sdks/typescript`).
 See [Visual overview](#visual-overview) and the [API docs](docs/api/) for
 details.
 
@@ -458,7 +463,7 @@ flowchart TB
 
 ### Golden path (hardened) vs experimental
 
-The hardened golden path is: seed → analyze → dry-run → approve → execute → verify → report, driven by `./migrate-aura.sh --yes` or `relating aura migrate --project ID --connection CID --yes --report out.json`. It is covered by unit tests, fake-Bolt integration tests (resume-after-failure, parallel edges, rollback), and a CI job running the full flow against real Neo4j. Everything outside it — shadow replay, the graph debugger, synthetic fixtures, the sizing advisor, continuous sync — is functional but experimental: use it, but verify results before trusting them in production.
+The hardened golden path is: seed → analyze → dry-run → approve → execute → verify → report, driven by `./migrate-aura.sh --yes` or `relating aura migrate --project ID --connection CID --yes --report out.json`. It is covered by unit tests, fake-Bolt integration tests (resume-after-failure, parallel edges, rollback), and a CI job running the full flow against real Neo4j. Continuous delta sync (`POST .../sync`, `POST .../drift`, `GET .../changes`) earned the same coverage: stable ordered scans, watermark state, versioned compare-and-set writes, explicit delete propagation, and tamper-evident drift checks are all integration-tested. Everything else outside the golden path — shadow replay, the graph debugger, synthetic fixtures, the sizing advisor — is functional but experimental: use it, but verify results before trusting them in production.
 
 ### No query rewrites: what actually flips
 
@@ -469,25 +474,26 @@ Two integration styles, two flip mechanisms — neither rewrites queries:
 
 Relate's existing Neo4j/Aura pull/push capabilities can be used where appropriate. Validate their exact semantics against the installed Relate version. In particular, do not assume that indexes, constraints, vector metadata, or all Neo4j features are transferred automatically. Never claim that a push is a destructive mirror unless the upstream implementation explicitly guarantees that behavior.
 
-Incremental synchronization is not automatically real-time replication. It requires change tracking, stable identities, conflict handling, and reconciliation. Treat it as P1 unless those semantics are implemented and tested.
+Incremental synchronization is on-demand delta sync, not real-time streaming replication: it ships change tracking (watermarks, change feed), stable identities (uid keys plus `_version`/`_updated_at`), conflict handling (newer-version-wins compare-and-set), and reconciliation (drift detection, superset-aware verification) — all implemented and integration-tested. A live CDC log tail remains out of scope; schedule `POST .../sync` for near-real-time freshness.
 
 ## 9. Security and enterprise requirements
 
 - Local secrets in OS keychain where available.
-- Server secrets through Vault/KMS or encrypted secret storage.
+- Server secrets through env, mounted secret files, or the OS keychain today; Vault/KMS backends are a deferred follow-up.
 - `RELATING_API_TOKEN` bearer gate for `/api/v1` on shared hosts (see [secrets.md](docs/secrets.md)); compose binds every port to 127.0.0.1.
 - Containers run as non-root; base images are minor-pinned.
 - TLS for remote interfaces.
-- OIDC and RBAC for team deployments.
-- Project-level data isolation.
+- OIDC single sign-on (HS256 JWT verification, dependency-free) with login/callback sessions — see [auth.md](docs/api/auth.md). RS256 needs the `jsonwebtoken` follow-up.
+- RBAC for team deployments: viewer reads, editor writes, global admin manages grants; migration approvals need a second SSO actor.
+- Project-level data isolation, including MCP session scoping per project.
 - Read-only defaults for Cypher and MCP.
 - Explicit confirmation for graph writes and Aura migration.
-- Query timeout, result limits, rate limits, and upload limits.
-- Audit events for access, model calls, ingestion, graph writes, and migrations.
+- Query timeout, result limits, rate limits (5-strikes 401 lockout), and upload limits.
+- Hash-chained, append-only audit log for access, logins, grants, ingestion, graph writes, and migrations, with JSON/CSV export and chain verification.
 - No third-party model transmission without provider configuration and user/admin consent.
 - Configurable retention and deletion policies.
 - Dependency, container, and license scanning.
-- No secrets in logs, prompts, traces, or exported manifests.
+- No secrets in logs, prompts, traces, or exported manifests; provider keys are write-only and never returned by the API.
 
 ## 10. Suggested repository layout
 
@@ -496,7 +502,7 @@ Start with a small number of crates and modules. Expand only when boundaries are
 ```text
 relating/
 ├── web/                     # React + TypeScript workbench (12 tabs)
-├── crates/                  # 16 workspace crates
+├── crates/                  # 17 workspace crates
 │   ├── relating-core/       # domain types, secrets, env config
 │   ├── relating-metadata/   # SQLite runtime store + Postgres provisioning
 │   ├── relating-server/     # Axum REST API + binaries
@@ -512,7 +518,9 @@ relating/
 │   ├── relating-shadow/     # dual-backend replay + comparison
 │   ├── relating-debug/      # GraphRAG traces + diagnosis
 │   ├── relating-synth/      # synthetic fixture generation
-│   └── relating-advisor/    # perf/cost rules, sizing, measurements
+│   ├── relating-advisor/    # perf/cost rules, sizing, measurements
+│   └── relating-connectors/ # SQL + REST sources, mapping, test stub
+├── sdks/                    # zero-dep API clients (python, typescript)
 ├── tests/fixtures/          # deterministic seed fixtures (aura-fill ontology)
 ├── docs/api/                # per-area API contracts
 ├── .github/workflows/       # CI gates, Aura nightly, releases
@@ -580,6 +588,11 @@ Do not plan this as a months-long architecture exercise. Build a thin vertical s
 - R4: Graph CI/CD + GitHub Actions.
 - R5: Shadow testing + AI Graph Debugger.
 - R6: Synthetic graph data + performance advisor.
+
+### Enterprise E1–E3 ✅
+- E1: Continuous delta sync — stable ordered scans, watermark state, versioned compare-and-set writes, explicit delete propagation, drift detection, change feed.
+- E2: Enterprise identity — OIDC single sign-on, viewer/editor/admin RBAC with second-actor approvals, hash-chained audit log with export. (Vault/KMS secret backends deferred.)
+- E3: Data connectors + SDKs — SQL (SQLite/Postgres/MySQL) and REST sources with managed sync and incremental ingest, plus zero-dependency Python/TypeScript clients with the `RELATING_TARGET` backend flip.
 
 A milestone is complete only when its acceptance tests pass.
 

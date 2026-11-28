@@ -3,6 +3,7 @@ pub mod ai;
 pub mod audit;
 pub mod aura;
 pub mod auth;
+pub mod connections;
 pub mod cypher;
 pub mod debug;
 pub mod embeddings;
@@ -399,6 +400,27 @@ pub fn create_router(state: AppState) -> Router {
         )
         // Ingestion endpoint
         .route("/projects/:id/ingest", post(ingest::run_ingestion_handler))
+        // Data connectors: SQL + REST sources with managed sync
+        .route(
+            "/projects/:id/connectors",
+            get(connections::list_connectors_handler).post(connections::create_connector_handler),
+        )
+        .route(
+            "/projects/:id/connectors/due",
+            get(connections::due_connectors_handler),
+        )
+        .route(
+            "/projects/:id/connectors/:cid",
+            get(connections::get_connector_handler).delete(connections::delete_connector_handler),
+        )
+        .route(
+            "/projects/:id/connectors/:cid/test",
+            post(connections::test_connector_handler),
+        )
+        .route(
+            "/projects/:id/connectors/:cid/sync",
+            post(connections::sync_connector_handler),
+        )
         // Graph visualization elements endpoint
         .route(
             "/projects/:id/graph/elements",

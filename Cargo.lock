@@ -2673,6 +2673,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "relating-connectors"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "relating-core",
+ "relating-ingest",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "relating-core"
 version = "0.1.0"
 dependencies = [
@@ -2856,6 +2875,7 @@ dependencies = [
  "http-body-util",
  "relating-advisor",
  "relating-ai",
+ "relating-connectors",
  "relating-core",
  "relating-debug",
  "relating-graph",

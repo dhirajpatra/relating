@@ -1,0 +1,27 @@
+[package]
+name = "relating-connectors"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+relating-core = { workspace = true }
+relating-ingest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+# Any-pool SQL sources: sqlite, postgres, and mysql compiled in.
+# No TLS stack: postgres `sslmode=require` is rejected at validation (see
+# SqlConfig::validate) until a TLS follow-up lands; private-network
+# `disable`/`prefer` work today.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "mysql", "any", "chrono", "uuid"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -26,6 +26,15 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# SDK build outputs (scoped: web/node_modules stays tracked historically)
+sdks/typescript/dist/
+sdks/typescript/node_modules/
+sdks/python/build/
+sdks/python/dist/
+sdks/python/*.egg-info/
+sdks/python/**/__pycache__/
+*.py[cod]
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

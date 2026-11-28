@@ -36,6 +36,7 @@ pub fn expected_tables() -> Vec<String> {
         "sessions",
         "pending_logins",
         "audit_log",
+        "data_connectors",
     ]
     .into_iter()
     .map(|s| s.to_string())

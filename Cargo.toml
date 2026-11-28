@@ -16,6 +16,7 @@ members = [
     "crates/relating-debug",
     "crates/relating-synth",
     "crates/relating-advisor",
+    "crates/relating-connectors",
     "crates/relating-server",
 ]
 
@@ -79,3 +80,4 @@ relating-shadow = { path = "crates/relating-shadow" }
 relating-debug = { path = "crates/relating-debug" }
 relating-synth = { path = "crates/relating-synth" }
 relating-advisor = { path = "crates/relating-advisor" }
+relating-connectors = { path = "crates/relating-connectors" }

@@ -1,0 +1,23 @@
+{
+  "name": "@relating/sdk",
+  "version": "0.1.0",
+  "description": "Ergonomic TypeScript client for the Relating graph API",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "../../web/node_modules/.bin/tsc -p tsconfig.json",
+    "test": "npm run build && node dist/test/client.test.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

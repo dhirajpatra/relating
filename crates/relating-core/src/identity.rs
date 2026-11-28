@@ -173,7 +173,8 @@ pub fn authorize(ctx: &ActorContext, method: &str, path: &str) -> Result<(), Str
         return Ok(());
     }
     let is_write = !matches!(method, "GET" | "HEAD" | "OPTIONS");
-    let read_only_post = method == "POST" && path.ends_with("/drift");
+    // Drift checks and connection probes POST but never write.
+    let read_only_post = method == "POST" && (path.ends_with("/drift") || path.ends_with("/test"));
     let effective = ctx.effective_role();
     if !is_write || read_only_post {
         return match effective {
@@ -602,6 +603,7 @@ mod tests {
         assert!(authorize(&viewer, "GET", "/api/v1/projects/p/sources").is_ok());
         assert!(authorize(&viewer, "POST", "/api/v1/projects/p/sources").is_err());
         assert!(authorize(&viewer, "POST", "/api/v1/projects/p/migrations/m/drift").is_ok());
+        assert!(authorize(&viewer, "POST", "/api/v1/projects/p/connectors/c/test").is_ok());
         assert!(authorize(&viewer, "GET", "/api/v1/projects/p/grants").is_err());
 
         let editor = ActorContext {

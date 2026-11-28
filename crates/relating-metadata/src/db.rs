@@ -63,6 +63,7 @@ pub const MIGRATION_SCHEMA: &str = include_str!("../migrations/0004_migration.sq
 pub const SCHEMA_AS_CODE_SCHEMA: &str = include_str!("../migrations/0005_schema.sql");
 pub const SYNC_SCHEMA: &str = include_str!("../migrations/0006_sync.sql");
 pub const IDENTITY_SCHEMA: &str = include_str!("../migrations/0007_identity.sql");
+pub const CONNECTORS_SCHEMA: &str = include_str!("../migrations/0008_connectors.sql");
 
 pub async fn run_migrations(pool: &DbPool) -> Result<(), RelatingError> {
     sqlx::raw_sql(INITIAL_SCHEMA)
@@ -99,6 +100,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), RelatingError> {
         .execute(pool)
         .await
         .map_err(|e| RelatingError::Database(format!("Migration 0007 failed: {}", e)))?;
+
+    sqlx::raw_sql(CONNECTORS_SCHEMA)
+        .execute(pool)
+        .await
+        .map_err(|e| RelatingError::Database(format!("Migration 0008 failed: {}", e)))?;
 
     Ok(())
 }
